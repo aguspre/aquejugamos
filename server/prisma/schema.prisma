@@ -1,0 +1,314 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// Enums
+// ============================================================================
+
+enum UserGameStatus {
+  owned
+  wishlist
+  want_to_play
+  previously_owned
+}
+
+enum GroupRole {
+  admin
+  member
+}
+
+enum SessionStatus {
+  planning
+  voting
+  locked
+  completed
+  cancelled
+}
+
+enum VotingMode {
+  single_choice
+  multi_vote
+  ranked_top3
+}
+
+enum RsvpStatus {
+  going
+  maybe
+  not_going
+}
+
+// ============================================================================
+// 1. Usuarios
+// ============================================================================
+
+model User {
+  id            String    @id @default(uuid()) @db.Uuid
+  email         String    @unique
+  passwordHash  String?   @map("password_hash")
+  googleId      String?   @unique @map("google_id")
+  displayName   String    @map("display_name")
+  avatarUrl     String?   @map("avatar_url")
+  bggUsername   String?   @map("bgg_username")
+  lastBggSyncAt DateTime? @map("last_bgg_sync_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  userGames             UserGame[]
+  createdGroups         Group[]              @relation("GroupCreator")
+  groupMemberships      GroupMember[]
+  hostedSessions        Session[]            @relation("SessionHost")
+  sessionParticipations SessionParticipant[]
+  proposals             SessionProposal[]    @relation("ProposalAuthor")
+  votes                 SessionVote[]
+  createdPlayLogs       PlayLog[]            @relation("PlayLogCreator")
+  playLogEntries        PlayLogPlayer[]
+
+  @@index([bggUsername])
+  @@map("users")
+}
+
+// ============================================================================
+// 2. Catálogo Maestro de Juegos (Cache BGG)
+// ============================================================================
+
+model Game {
+  id                 String    @id @default(uuid()) @db.Uuid
+  bggId              Int       @unique @map("bgg_id")
+  name               String
+  yearPublished      Int?      @map("year_published")
+  imageUrl           String?   @map("image_url")
+  thumbnailUrl       String?   @map("thumbnail_url")
+  minPlayers         Int?      @map("min_players")
+  maxPlayers         Int?      @map("max_players")
+  bestPlayers        Int[]     @default([]) @map("best_players")
+  playingTimeMinutes Int?      @map("playing_time_minutes")
+  weight             Decimal?  @db.Decimal(3, 2)
+  bggRating          Decimal?  @map("bgg_rating") @db.Decimal(4, 2)
+  isExpansion        Boolean   @default(false) @map("is_expansion")
+  baseGameBggId      Int?      @map("base_game_bgg_id")
+  bggSyncedAt        DateTime? @map("bgg_synced_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  mechanics        GameMechanic[]
+  userGames        UserGame[]
+  sessionProposals SessionProposal[]
+  playLogs         PlayLog[]
+
+  @@index([name])
+  @@index([isExpansion, minPlayers, maxPlayers])
+  @@index([playingTimeMinutes])
+  @@index([weight])
+  @@index([baseGameBggId])
+  @@map("games")
+}
+
+model Mechanic {
+  id    String @id @default(uuid()) @db.Uuid
+  bggId Int    @unique @map("bgg_id")
+  name  String @unique
+
+  games GameMechanic[]
+
+  @@map("mechanics")
+}
+
+model GameMechanic {
+  gameId     String @map("game_id") @db.Uuid
+  mechanicId String @map("mechanic_id") @db.Uuid
+
+  game     Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  mechanic Mechanic @relation(fields: [mechanicId], references: [id], onDelete: Cascade)
+
+  @@id([gameId, mechanicId])
+  @@index([mechanicId])
+  @@map("game_mechanics")
+}
+
+// ============================================================================
+// 3. Ludoteca Personal
+// ============================================================================
+
+model UserGame {
+  userId         String         @map("user_id") @db.Uuid
+  gameId         String         @map("game_id") @db.Uuid
+  status         UserGameStatus @default(owned)
+  personalRating Decimal?       @map("personal_rating") @db.Decimal(4, 2)
+  notes          String?        @db.Text
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@id([userId, gameId])
+  @@index([userId, status])
+  @@index([gameId])
+  @@map("user_games")
+}
+
+// ============================================================================
+// 4. Grupos
+// ============================================================================
+
+model Group {
+  id         String   @id @default(uuid()) @db.Uuid
+  name       String
+  inviteCode String   @unique @map("invite_code")
+  createdBy  String   @map("created_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  creator  User          @relation("GroupCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  members  GroupMember[]
+  sessions Session[]
+  playLogs PlayLog[]
+
+  @@index([createdBy])
+  @@map("groups")
+}
+
+model GroupMember {
+  groupId  String    @map("group_id") @db.Uuid
+  userId   String    @map("user_id") @db.Uuid
+  role     GroupRole @default(member)
+  joinedAt DateTime  @default(now()) @map("joined_at")
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, userId])
+  @@index([userId])
+  @@map("group_members")
+}
+
+// ============================================================================
+// 5. Juntadas
+// ============================================================================
+
+model Session {
+  id              String        @id @default(uuid()) @db.Uuid
+  groupId         String?       @map("group_id") @db.Uuid
+  hostId          String        @map("host_id") @db.Uuid
+  title           String
+  scheduledAt     DateTime      @map("scheduled_at")
+  location        String?
+  status          SessionStatus @default(planning)
+  votingMode      VotingMode    @default(multi_vote) @map("voting_mode")
+  maxVotesPerUser Int           @default(3) @map("max_votes_per_user")
+  inviteToken     String        @unique @map("invite_token")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  group        Group?               @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  host         User                 @relation("SessionHost", fields: [hostId], references: [id], onDelete: Restrict)
+  participants SessionParticipant[]
+  proposals    SessionProposal[]
+  playLogs     PlayLog[]
+
+  @@index([groupId, scheduledAt])
+  @@index([hostId])
+  @@index([status])
+  @@map("sessions")
+}
+
+model SessionParticipant {
+  sessionId   String     @map("session_id") @db.Uuid
+  userId      String     @map("user_id") @db.Uuid
+  rsvp        RsvpStatus @default(going)
+  respondedAt DateTime   @default(now()) @map("responded_at")
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([sessionId, userId])
+  @@index([sessionId, rsvp])
+  @@index([userId])
+  @@map("session_participants")
+}
+
+// ============================================================================
+// 6. Propuestas y Votación
+// ============================================================================
+
+model SessionProposal {
+  id         String   @id @default(uuid()) @db.Uuid
+  sessionId  String   @map("session_id") @db.Uuid
+  gameId     String   @map("game_id") @db.Uuid
+  proposedBy String   @map("proposed_by") @db.Uuid
+  note       String?  @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  session  Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  game     Game          @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  proposer User          @relation("ProposalAuthor", fields: [proposedBy], references: [id], onDelete: Cascade)
+  votes    SessionVote[]
+
+  @@unique([sessionId, gameId])
+  @@index([sessionId])
+  @@index([gameId])
+  @@map("session_proposals")
+}
+
+model SessionVote {
+  proposalId String   @map("proposal_id") @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  rank       Int      @default(1)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  proposal SessionProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([proposalId, userId])
+  @@index([userId])
+  @@map("session_votes")
+}
+
+// ============================================================================
+// 7. Historial de Partidas
+// ============================================================================
+
+model PlayLog {
+  id              String   @id @default(uuid()) @db.Uuid
+  sessionId       String?  @map("session_id") @db.Uuid
+  groupId         String?  @map("group_id") @db.Uuid
+  gameId          String   @map("game_id") @db.Uuid
+  playedAt        DateTime @default(now()) @map("played_at")
+  durationMinutes Int?     @map("duration_minutes")
+  notes           String?  @db.Text
+  createdBy       String   @map("created_by") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  session Session?        @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  group   Group?          @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  game    Game            @relation(fields: [gameId], references: [id], onDelete: Restrict)
+  creator User            @relation("PlayLogCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  players PlayLogPlayer[]
+
+  @@index([groupId, playedAt])
+  @@index([sessionId])
+  @@index([gameId])
+  @@index([createdBy])
+  @@map("play_logs")
+}
+
+model PlayLogPlayer {
+  playLogId String  @map("play_log_id") @db.Uuid
+  userId    String  @map("user_id") @db.Uuid
+  score     Int?
+  isWinner  Boolean @default(false) @map("is_winner")
+
+  playLog PlayLog @relation(fields: [playLogId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([playLogId, userId])
+  @@index([userId, isWinner])
+  @@map("play_log_players")
+}

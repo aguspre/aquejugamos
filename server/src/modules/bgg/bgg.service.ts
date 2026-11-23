@@ -1,0 +1,359 @@
+import { Prisma, UserGameStatus } from '@prisma/client';
+import { getEnv } from '../../config/env.js';
+import { prisma } from '../../config/prisma.js';
+import { badRequest, notFound } from '../../utils/errors.js';
+import { getBggClient } from './bgg.client.js';
+import type { BggImportBody } from './bgg.schemas.js';
+import type { BggGameDetails, BggSyncSummary } from './bgg.types.js';
+
+function decimalToNumber(value: Prisma.Decimal | null | undefined): number | null {
+  return value !== null && value !== undefined ? Number(value) : null;
+}
+
+export async function upsertGamesFromBgg(
+  bggIds: number[],
+  options: { forceRefresh?: boolean } = {},
+): Promise<{
+  gamesByBggId: Map<number, { id: string; bggId: number }>;
+  metadataRefreshed: number;
+}> {
+  const uniqueIds = Array.from(new Set(bggIds.filter((id) => Number.isInteger(id) && id > 0)));
+  if (uniqueIds.length === 0) {
+    return { gamesByBggId: new Map(), metadataRefreshed: 0 };
+  }
+
+  const env = getEnv();
+  const ttlMs = env.BGG_CACHE_TTL_DAYS * 24 * 60 * 60 * 1000;
+  const staleCutoff = new Date(Date.now() - ttlMs);
+
+  const existingGames = await prisma.game.findMany({
+    where: { bggId: { in: uniqueIds } },
+    select: { id: true, bggId: true, bggSyncedAt: true },
+  });
+
+  const existingByBggId = new Map(existingGames.map((g) => [g.bggId, g]));
+
+  const idsToFetch = uniqueIds.filter((bggId) => {
+    if (options.forceRefresh) return true;
+    const existing = existingByBggId.get(bggId);
+    if (!existing || !existing.bggSyncedAt) return true;
+    return existing.bggSyncedAt < staleCutoff;
+  });
+
+  let metadataRefreshed = 0;
+
+  if (idsToFetch.length > 0) {
+    const detailsList = await getBggClient().fetchThingsByIds(idsToFetch);
+    await persistBggGameDetails(detailsList);
+    metadataRefreshed = detailsList.length;
+  }
+
+  const finalGames = await prisma.game.findMany({
+    where: { bggId: { in: uniqueIds } },
+    select: { id: true, bggId: true },
+  });
+
+  return {
+    gamesByBggId: new Map(finalGames.map((g) => [g.bggId, g])),
+    metadataRefreshed,
+  };
+}
+
+async function persistBggGameDetails(detailsList: BggGameDetails[]): Promise<void> {
+  if (detailsList.length === 0) return;
+
+  // 1. Upsert all unique mechanics first
+  const uniqueMechanics = new Map<number, string>();
+  for (const details of detailsList) {
+    for (const mechanic of details.mechanics) {
+      uniqueMechanics.set(mechanic.bggId, mechanic.name);
+    }
+  }
+
+  const mechanicIdByBggId = new Map<number, string>();
+  for (const [bggId, name] of uniqueMechanics.entries()) {
+    const record = await prisma.mechanic.upsert({
+      where: { bggId },
+      update: { name },
+      create: { bggId, name },
+      select: { id: true, bggId: true },
+    });
+    mechanicIdByBggId.set(record.bggId, record.id);
+  }
+
+  // 2. Upsert each game and refresh its mechanics links
+  const syncedAt = new Date();
+
+  for (const details of detailsList) {
+    const gameData = {
+      name: details.name,
+      yearPublished: details.yearPublished,
+      imageUrl: details.imageUrl,
+      thumbnailUrl: details.thumbnailUrl,
+      minPlayers: details.minPlayers,
+      maxPlayers: details.maxPlayers,
+      bestPlayers: details.bestPlayers,
+      playingTimeMinutes: details.playingTimeMinutes,
+      weight: details.weight !== null ? new Prisma.Decimal(details.weight.toFixed(2)) : null,
+      bggRating:
+        details.bggRating !== null ? new Prisma.Decimal(details.bggRating.toFixed(2)) : null,
+      isExpansion: details.isExpansion,
+      baseGameBggId: details.baseGameBggId,
+      bggSyncedAt: syncedAt,
+    };
+
+    const mechanicIds = details.mechanics
+      .map((m) => mechanicIdByBggId.get(m.bggId))
+      .filter((id): id is string => Boolean(id));
+
+    await prisma.$transaction(async (tx) => {
+      const game = await tx.game.upsert({
+        where: { bggId: details.bggId },
+        update: gameData,
+        create: {
+          bggId: details.bggId,
+          ...gameData,
+        },
+        select: { id: true },
+      });
+
+      await tx.gameMechanic.deleteMany({
+        where: { gameId: game.id },
+      });
+
+      if (mechanicIds.length > 0) {
+        await tx.gameMechanic.createMany({
+          data: mechanicIds.map((mechanicId) => ({
+            gameId: game.id,
+            mechanicId,
+          })),
+          skipDuplicates: true,
+        });
+      }
+    });
+  }
+}
+
+export async function syncUserBggCollection(
+  userId: string,
+  bggUsernameInput?: string,
+  forceRefresh = false,
+): Promise<BggSyncSummary> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, bggUsername: true },
+  });
+
+  if (!user) {
+    throw notFound('Usuario no encontrado', 'USER_NOT_FOUND');
+  }
+
+  const bggUsername = bggUsernameInput?.trim() || user.bggUsername?.trim();
+  if (!bggUsername) {
+    throw badRequest(
+      'Debés indicar un nombre de usuario de BoardGameGeek para sincronizar',
+      undefined,
+      'BGG_USERNAME_REQUIRED',
+    );
+  }
+
+  const collectionItems = await getBggClient().fetchUserCollection(bggUsername);
+  const collectionBggIds = collectionItems.map((item) => item.bggId);
+
+  const { gamesByBggId, metadataRefreshed } = await upsertGamesFromBgg(collectionBggIds, {
+    forceRefresh,
+  });
+
+  const resolvedGameIds = collectionItems
+    .map((item) => gamesByBggId.get(item.bggId)?.id)
+    .filter((id): id is string => Boolean(id));
+
+  const existingLibrary = await prisma.userGame.findMany({
+    where: {
+      userId,
+      gameId: { in: resolvedGameIds },
+    },
+    select: { gameId: true },
+  });
+
+  const existingGameIdSet = new Set(existingLibrary.map((entry) => entry.gameId));
+  let addedToLibrary = 0;
+  let updatedInLibrary = 0;
+
+  for (const item of collectionItems) {
+    const game = gamesByBggId.get(item.bggId);
+    if (!game) continue;
+
+    const ratingDecimal =
+      item.personalRating !== null
+        ? new Prisma.Decimal(item.personalRating.toFixed(2))
+        : undefined;
+
+    await prisma.userGame.upsert({
+      where: {
+        userId_gameId: {
+          userId,
+          gameId: game.id,
+        },
+      },
+      update: {
+        status: UserGameStatus.owned,
+        ...(ratingDecimal !== undefined ? { personalRating: ratingDecimal } : {}),
+      },
+      create: {
+        userId,
+        gameId: game.id,
+        status: UserGameStatus.owned,
+        personalRating: ratingDecimal ?? null,
+      },
+    });
+
+    if (existingGameIdSet.has(game.id)) {
+      updatedInLibrary += 1;
+    } else {
+      addedToLibrary += 1;
+    }
+  }
+
+  const syncedAt = new Date();
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      bggUsername,
+      lastBggSyncAt: syncedAt,
+    },
+  });
+
+  return {
+    bggUsername,
+    totalInBgg: collectionItems.length,
+    metadataRefreshed,
+    addedToLibrary,
+    updatedInLibrary,
+    syncedAt,
+  };
+}
+
+export async function searchBggCatalog(userId: string, query: string, exact = false) {
+  const results = (await getBggClient().searchGames(query, exact)).slice(0, 30);
+  if (results.length === 0) {
+    return [];
+  }
+
+  const bggIds = results.map((item) => item.bggId);
+
+  const cachedGames = await prisma.game.findMany({
+    where: { bggId: { in: bggIds } },
+    select: {
+      id: true,
+      bggId: true,
+      thumbnailUrl: true,
+      minPlayers: true,
+      maxPlayers: true,
+      playingTimeMinutes: true,
+      userGames: {
+        where: { userId },
+        select: { status: true },
+      },
+    },
+  });
+
+  const cachedByBggId = new Map(cachedGames.map((g) => [g.bggId, g]));
+
+  return results.map((item) => {
+    const cached = cachedByBggId.get(item.bggId);
+    return {
+      ...item,
+      thumbnailUrl: cached?.thumbnailUrl ?? null,
+      minPlayers: cached?.minPlayers ?? null,
+      maxPlayers: cached?.maxPlayers ?? null,
+      playingTimeMinutes: cached?.playingTimeMinutes ?? null,
+      inLibraryStatus: cached?.userGames[0]?.status ?? null,
+    };
+  });
+}
+
+export async function importGameToLibrary(
+  userId: string,
+  bggId: number,
+  input: BggImportBody,
+) {
+  const { gamesByBggId } = await upsertGamesFromBgg([bggId]);
+  const game = gamesByBggId.get(bggId);
+
+  if (!game) {
+    throw notFound(
+      `No se encontró el juego #${bggId} en BoardGameGeek`,
+      'BGG_GAME_NOT_FOUND',
+    );
+  }
+
+  const ratingDecimal =
+    input.personalRating !== undefined
+      ? input.personalRating !== null
+        ? new Prisma.Decimal(input.personalRating.toFixed(2))
+        : null
+      : undefined;
+
+  const entry = await prisma.userGame.upsert({
+    where: {
+      userId_gameId: {
+        userId,
+        gameId: game.id,
+      },
+    },
+    update: {
+      status: input.status,
+      ...(ratingDecimal !== undefined ? { personalRating: ratingDecimal } : {}),
+      ...(input.notes !== undefined ? { notes: input.notes } : {}),
+    },
+    create: {
+      userId,
+      gameId: game.id,
+      status: input.status,
+      personalRating: ratingDecimal ?? null,
+      notes: input.notes ?? null,
+    },
+    include: {
+      game: {
+        include: {
+          mechanics: {
+            include: {
+              mechanic: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  return {
+    gameId: entry.gameId,
+    status: entry.status,
+    personalRating: decimalToNumber(entry.personalRating),
+    notes: entry.notes,
+    updatedAt: entry.updatedAt,
+    game: {
+      id: entry.game.id,
+      bggId: entry.game.bggId,
+      name: entry.game.name,
+      yearPublished: entry.game.yearPublished,
+      imageUrl: entry.game.imageUrl,
+      thumbnailUrl: entry.game.thumbnailUrl,
+      minPlayers: entry.game.minPlayers,
+      maxPlayers: entry.game.maxPlayers,
+      bestPlayers: entry.game.bestPlayers,
+      playingTimeMinutes: entry.game.playingTimeMinutes,
+      weight: decimalToNumber(entry.game.weight),
+      bggRating: decimalToNumber(entry.game.bggRating),
+      isExpansion: entry.game.isExpansion,
+      baseGameBggId: entry.game.baseGameBggId,
+      mechanics: entry.game.mechanics.map((gm) => ({
+        id: gm.mechanic.id,
+        bggId: gm.mechanic.bggId,
+        name: gm.mechanic.name,
+      })),
+    },
+  };
+}

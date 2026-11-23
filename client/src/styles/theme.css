@@ -1,0 +1,167 @@
+@import "tailwindcss";
+
+@theme {
+  /* Typography */
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: "Fraunces", Georgia, Cambria, serif;
+
+  /* Tactile Tabletop Surfaces */
+  --color-canvas: #FAF8F4;
+  --color-canvas-subtle: #F3EFE8;
+  --color-canvas-deep: #EAE4D9;
+  --color-surface: #FFFFFF;
+
+  /* Warm Borders */
+  --color-border: #E7E1D7;
+  --color-border-strong: #D4CBBF;
+
+  /* Ink */
+  --color-ink: #1F2421;
+  --color-ink-muted: #5C615B;
+  --color-ink-subtle: #858A82;
+
+  /* Primary: Deep Forest Green */
+  --color-forest-50: #F0F6F3;
+  --color-forest-100: #DCECE4;
+  --color-forest-200: #B9D9C9;
+  --color-forest-500: #2C6E54;
+  --color-forest-600: #1E4D3B;
+  --color-forest-700: #163A2C;
+  --color-forest-900: #0E261D;
+
+  /* Accent: Warm Terracotta */
+  --color-terracotta-50: #FDF3EE;
+  --color-terracotta-100: #FAE1D4;
+  --color-terracotta-200: #F3C1A7;
+  --color-terracotta-500: #C85A32;
+  --color-terracotta-600: #AD4925;
+  --color-terracotta-700: #8D391B;
+
+  /* Accent: Tabletop Ochre / Gold */
+  --color-ochre-50: #FDF7EA;
+  --color-ochre-100: #F9EACA;
+  --color-ochre-500: #C98223;
+  --color-ochre-700: #8F5810;
+
+  /* Semantic Metadata: Players (Slate Teal) */
+  --color-teal-50: #EDF6F8;
+  --color-teal-100: #D3E9EE;
+  --color-teal-700: #1D5B6E;
+
+  /* Shadows (warm stone tint) */
+  --shadow-card: 0 1px 2px rgba(31, 36, 33, 0.05), 0 4px 12px -4px rgba(31, 36, 33, 0.06);
+  --shadow-card-hover: 0 2px 6px rgba(31, 36, 33, 0.07), 0 12px 24px -8px rgba(31, 36, 33, 0.11);
+  --shadow-floating: 0 12px 32px -8px rgba(31, 36, 33, 0.16), 0 2px 6px rgba(31, 36, 33, 0.06);
+
+  /* Radii */
+  --radius-card: 1rem;
+  --radius-control: 0.75rem;
+}
+
+@layer base {
+  :root {
+    --target-size: 32px;
+    --bottom-nav-height: 4.25rem;
+  }
+
+  @media (pointer: coarse) {
+    :root {
+      --target-size: 44px;
+    }
+  }
+
+  html {
+    font-family: var(--font-sans);
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    scroll-padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px) + 1rem);
+  }
+
+  body {
+    overflow-wrap: break-word;
+    background-image:
+      radial-gradient(at 0% 0%, rgba(220, 236, 228, 0.42) 0px, transparent 48%),
+      radial-gradient(at 100% 0%, rgba(250, 225, 212, 0.28) 0px, transparent 42%);
+    background-attachment: fixed;
+    min-height: 100dvh;
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  p,
+  li {
+    text-wrap: pretty;
+  }
+
+  button:not(:disabled),
+  a[href] {
+    cursor: pointer;
+  }
+}
+
+/* Tactile card interaction: stretched primary trigger with elevated independent controls */
+.tabletop-card {
+  position: relative;
+  container-type: inline-size;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  transition:
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 180ms ease,
+    border-color 180ms ease;
+}
+
+.tabletop-card:has(.card-primary-trigger:hover) {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
+  border-color: var(--color-border-strong);
+}
+
+.tabletop-card:has(.card-primary-trigger:focus-visible) {
+  outline: 2px solid var(--color-forest-600);
+  outline-offset: 2px;
+}
+
+.tabletop-card .card-primary-trigger::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.tabletop-card .card-primary-trigger:focus-visible {
+  outline: none;
+}
+
+.tabletop-card .card-elevated-action {
+  position: relative;
+  z-index: 1;
+}
+
+/* Safe-area aware mobile bottom navigation */
+.mobile-bottom-nav {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
+  padding-left: max(0.5rem, env(safe-area-inset-left, 0px));
+  padding-right: max(0.5rem, env(safe-area-inset-right, 0px));
+}
+
+/* Subtle horizontal scroll strip for filter chips on mobile */
+.chip-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.chip-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* Tabular numbers utility for scores, votes, and player counts */
+.num-tabular {
+  font-variant-numeric: tabular-nums;
+}

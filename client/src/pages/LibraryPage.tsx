@@ -1,0 +1,446 @@
+import {
+  ArrowUpDown,
+  Check,
+  CheckCircle2,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Search,
+  X,
+} from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { GameCard } from '../components/game/GameCard';
+import { GameDetailDrawer } from '../components/game/GameDetailDrawer';
+import { FilterChipBar } from '../components/ui/FilterChipBar';
+import { useAppState } from '../context/AppStateContext';
+import type { Game, GameFilterState, UserGameStatus } from '../types/domain';
+import { DEFAULT_GAME_FILTERS, filterGames } from '../utils/filterGames';
+
+type SyncPhase = 'idle' | 'requesting' | 'queued_202' | 'done';
+type SortOption = 'name' | 'rating' | 'weight' | 'time';
+
+const STATUS_TABS: { id: 'all' | UserGameStatus; label: string }[] = [
+  { id: 'all', label: 'Todos' },
+  { id: 'owned', label: 'Lo tengo' },
+  { id: 'want_to_play', label: 'Quiero jugar' },
+  { id: 'wishlist', label: 'Wishlist' },
+];
+
+export function LibraryPage() {
+  const {
+    currentUser,
+    allGames,
+    library,
+    sessions,
+    lastBggSyncLabel,
+    ownershipByGame,
+    syncWithBgg,
+    updateLibraryItem,
+    addGameToLibrary,
+    proposeGame,
+  } = useAppState();
+
+  const [statusFilter, setStatusFilter] = useState<'all' | UserGameStatus>('all');
+  const [sortBy, setSortBy] = useState<SortOption>('name');
+  const [filters, setFilters] = useState<GameFilterState>({
+    ...DEFAULT_GAME_FILTERS,
+    includeExpansions: true,
+  });
+  const [syncPhase, setSyncPhase] = useState<SyncPhase>('idle');
+  const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
+  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [bggQuery, setBggQuery] = useState('');
+  const [toastMessage, setToastMessage] = useState<{
+    text: string;
+    sessionId?: string;
+  } | null>(null);
+
+  const activeVotingSession = sessions.find((s) => s.status === 'voting') ?? sessions[0];
+
+  const availableMechanics = useMemo(
+    () =>
+      Array.from(new Set(library.flatMap((g) => g.mechanics))).sort((a, b) =>
+        a.localeCompare(b, 'es'),
+      ),
+    [library],
+  );
+
+  const statusCounts = useMemo(
+    () => ({
+      all: library.length,
+      owned: library.filter((g) => g.status === 'owned').length,
+      want_to_play: library.filter((g) => g.status === 'want_to_play').length,
+      wishlist: library.filter((g) => g.status === 'wishlist').length,
+      previously_owned: library.filter((g) => g.status === 'previously_owned').length,
+    }),
+    [library],
+  );
+
+  const filteredGames = useMemo(() => {
+    const byStatus =
+      statusFilter === 'all'
+        ? library
+        : library.filter((g) => g.status === statusFilter);
+    const matched = filterGames(byStatus, filters);
+
+    return [...matched].sort((a, b) => {
+      switch (sortBy) {
+        case 'rating':
+          return b.bggRating - a.bggRating;
+        case 'weight':
+          return b.weight - a.weight;
+        case 'time':
+          return a.playingTimeMinutes - b.playingTimeMinutes;
+        default:
+          return a.name.localeCompare(b.name, 'es');
+      }
+    });
+  }, [library, statusFilter, filters, sortBy]);
+
+  const selectedEntry = selectedGameId
+    ? library.find((g) => g.id === selectedGameId) ?? null
+    : null;
+
+  const handleBggSync = async () => {
+    if (syncPhase === 'requesting' || syncPhase === 'queued_202') return;
+    setSyncPhase('requesting');
+    setTimeout(() => {
+      setSyncPhase((curr) => (curr === 'requesting' ? 'queued_202' : curr));
+    }, 900);
+
+    await syncWithBgg();
+    setSyncPhase('done');
+    setTimeout(() => setSyncPhase('idle'), 3000);
+  };
+
+  const handleProposeFromLibrary = (game: Game) => {
+    if (!activeVotingSession) return;
+    proposeGame(activeVotingSession.id, game);
+    setSelectedGameId(null);
+    setToastMessage({
+      text: `¡${game.name} propuesto en "${activeVotingSession.title}"!`,
+      sessionId: activeVotingSession.id,
+    });
+    setTimeout(() => setToastMessage(null), 4000);
+  };
+
+  const addableGames = useMemo(() => {
+    const ownedSet = new Set(library.map((g) => g.id));
+    const q = bggQuery.trim().toLowerCase();
+    return allGames.filter(
+      (g) => !ownedSet.has(g.id) && (!q || g.name.toLowerCase().includes(q)),
+    );
+  }, [allGames, library, bggQuery]);
+
+  return (
+    <div className="space-y-6">
+      {/* Header + BGG Sync Banner */}
+      <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-forest-200 bg-forest-50 px-3 py-0.5 text-xs font-bold text-forest-700">
+              BGG @{currentUser.bggUsername}
+            </span>
+            <span className="text-xs font-medium text-ink-subtle">
+              Última sincronización: <strong className="text-ink-muted">{lastBggSyncLabel}</strong>
+            </span>
+          </div>
+          <h1 className="font-[var(--font-display)] text-3xl sm:text-4xl font-bold tracking-tight text-ink">
+            Mi Ludoteca
+          </h1>
+          <p className="text-sm text-ink-muted">
+            Tu colección sincronizada con BoardGameGeek, lista para cruzar en las juntadas.
+          </p>
+        </div>
+
+        {/* Actions: BGG Sync + Manual Add */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => setAddModalOpen(true)}
+            className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border bg-surface px-4 text-sm font-bold text-ink hover:border-border-strong hover:bg-canvas-subtle transition"
+          >
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            Agregar juego
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void handleBggSync()}
+            disabled={syncPhase === 'requesting' || syncPhase === 'queued_202'}
+            className={`inline-flex min-h-11 items-center gap-2 rounded-xl px-4.5 text-sm font-bold shadow-xs transition ${
+              syncPhase === 'done'
+                ? 'bg-forest-500 text-white'
+                : 'bg-forest-600 text-white hover:bg-forest-700 disabled:opacity-90'
+            }`}
+          >
+            {syncPhase === 'requesting' || syncPhase === 'queued_202' ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            ) : syncPhase === 'done' ? (
+              <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+            ) : (
+              <RefreshCw className="h-4 w-4" aria-hidden="true" />
+            )}
+            <span>
+              {syncPhase === 'requesting'
+                ? 'Consultando BGG…'
+                : syncPhase === 'queued_202'
+                  ? 'BGG 202 · Preparando colección…'
+                  : syncPhase === 'done'
+                    ? '¡Sincronizado!'
+                    : 'Sincronizar con BGG'}
+            </span>
+          </button>
+        </div>
+      </header>
+
+      {/* BGG 202 Polling Progress Indicator */}
+      {(syncPhase === 'requesting' || syncPhase === 'queued_202') && (
+        <div
+          role="status"
+          className="flex items-center gap-3 rounded-2xl border border-ochre-100 bg-ochre-50/90 px-4 py-3 text-xs font-semibold text-ochre-700"
+        >
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-ochre-500" aria-hidden="true" />
+          <span>
+            {syncPhase === 'requesting'
+              ? `Conectando con BoardGameGeek XML API2 para @${currentUser.bggUsername}…`
+              : 'BoardGameGeek devolvió 202 Accepted (cola de generación). Reintentando automáticamente con backoff exponencial…'}
+          </span>
+        </div>
+      )}
+
+      {/* Proposal Confirmation Toast */}
+      {toastMessage && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-forest-200 bg-forest-50 px-4 py-3 text-sm font-semibold text-forest-900"
+        >
+          <span className="inline-flex items-center gap-2">
+            <Check className="h-4 w-4 text-forest-600" aria-hidden="true" />
+            {toastMessage.text}
+          </span>
+          {toastMessage.sessionId && (
+            <Link
+              to={`/sessions/${toastMessage.sessionId}`}
+              className="text-xs font-bold text-forest-700 underline hover:text-forest-900"
+            >
+              Ir a la juntada →
+            </Link>
+          )}
+        </div>
+      )}
+
+      {/* Status Tabs + Sort Select */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div
+          role="tablist"
+          aria-label="Filtrar por estado en colección"
+          className="flex items-center gap-1.5 overflow-x-auto chip-scroll pb-0.5"
+        >
+          {STATUS_TABS.map((tab) => {
+            const active = statusFilter === tab.id;
+            const count = statusCounts[tab.id];
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setStatusFilter(tab.id)}
+                className={`inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-xs font-bold transition ${
+                  active
+                    ? 'border-forest-600 bg-forest-600 text-white shadow-xs'
+                    : 'border-border bg-surface text-ink-muted hover:border-border-strong hover:text-ink'
+                }`}
+              >
+                <span>{tab.label}</span>
+                <span
+                  className={`rounded-full px-1.5 py-0.25 text-[10px] num-tabular ${
+                    active
+                      ? 'bg-white/20 text-white'
+                      : 'bg-canvas-subtle text-ink-subtle'
+                  }`}
+                >
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <label className="inline-flex items-center gap-2 self-start sm:self-auto text-xs font-semibold text-ink-muted">
+          <ArrowUpDown className="h-3.5 w-3.5" aria-hidden="true" />
+          <span>Ordenar:</span>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as SortOption)}
+            className="min-h-9 rounded-xl border border-border bg-surface px-2.5 text-xs font-bold text-ink focus:border-forest-600 focus:outline-none"
+          >
+            <option value="name">Nombre (A–Z)</option>
+            <option value="rating">Mejor Rating BGG</option>
+            <option value="weight">Mayor Complejidad</option>
+            <option value="time">Menor Duración</option>
+          </select>
+        </label>
+      </div>
+
+      {/* Filter Bar */}
+      <FilterChipBar
+        value={filters}
+        onChange={setFilters}
+        availableMechanics={availableMechanics}
+        resultCount={filteredGames.length}
+        totalCount={statusCounts[statusFilter]}
+        placeholder="Buscar en tu colección..."
+      />
+
+      {/* Game Grid */}
+      {filteredGames.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-border-strong bg-surface/70 px-6 py-12 text-center space-y-2">
+          <p className="font-[var(--font-display)] text-lg font-bold text-ink">
+            No encontramos juegos con esos filtros
+          </p>
+          <p className="text-sm text-ink-muted">
+            Probá limpiar algún filtro o agregar un título nuevo desde BoardGameGeek.
+          </p>
+        </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {filteredGames.map((item) => (
+            <GameCard
+              key={item.id}
+              game={item}
+              status={item.status}
+              personalRating={item.personalRating}
+              onSelect={(game) => setSelectedGameId(game.id)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Detail Drawer */}
+      <GameDetailDrawer
+        game={selectedEntry}
+        status={selectedEntry?.status}
+        notes={selectedEntry?.notes}
+        owners={selectedEntry ? ownershipByGame[selectedEntry.id] : undefined}
+        onUpdateStatus={(gameId, status) => updateLibraryItem(gameId, { status })}
+        onUpdateNotes={(gameId, notes) => updateLibraryItem(gameId, { notes })}
+        isProposed={
+          selectedEntry && activeVotingSession
+            ? activeVotingSession.proposals.some((p) => p.game.id === selectedEntry.id)
+            : false
+        }
+        proposeLabel={
+          activeVotingSession
+            ? `Proponer en "${activeVotingSession.title.slice(0, 22)}…"`
+            : 'Proponer en una juntada'
+        }
+        onPropose={activeVotingSession ? handleProposeFromLibrary : undefined}
+        onClose={() => setSelectedGameId(null)}
+      />
+
+      {/* Quick BGG Manual Search & Add Modal */}
+      {addModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-bgg-title"
+        >
+          <button
+            type="button"
+            aria-label="Cerrar"
+            onClick={() => setAddModalOpen(false)}
+            className="fixed inset-0 bg-ink/45 backdrop-blur-[2px]"
+          />
+          <div className="relative z-10 flex max-h-[85dvh] w-full sm:max-w-lg flex-col overflow-hidden rounded-t-3xl sm:rounded-3xl border border-border bg-surface shadow-[var(--shadow-floating)]">
+            <div className="flex items-center justify-between border-b border-border px-5 py-4">
+              <div>
+                <span className="text-[11px] font-bold uppercase tracking-wider text-forest-600">
+                  Catálogo BoardGameGeek
+                </span>
+                <h2
+                  id="add-bgg-title"
+                  className="font-[var(--font-display)] text-xl font-bold text-ink"
+                >
+                  Agregar juego manualmente
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAddModalOpen(false)}
+                aria-label="Cerrar"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full text-ink-muted hover:bg-canvas-subtle"
+              >
+                <X className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 overflow-y-auto">
+              <div className="relative">
+                <Search
+                  className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-subtle"
+                  aria-hidden="true"
+                />
+                <input
+                  type="search"
+                  value={bggQuery}
+                  onChange={(e) => setBggQuery(e.target.value)}
+                  placeholder="Buscá por nombre (ej. Azul, 7 Wonders, Codenames)..."
+                  className="w-full min-h-11 rounded-xl border border-border bg-canvas/70 pl-10 pr-4 text-sm text-ink focus:border-forest-600 focus:bg-surface focus:outline-none"
+                  autoFocus
+                />
+              </div>
+
+              {addableGames.length === 0 ? (
+                <p className="py-8 text-center text-sm text-ink-muted">
+                  ¡Ya tenés todos los juegos disponibles en tu colección o no hubo
+                  coincidencias!
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {addableGames.map((game) => (
+                    <li
+                      key={game.id}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-border bg-canvas/50 p-2.5"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <img
+                          src={game.thumbnailUrl}
+                          alt=""
+                          className="h-11 w-14 shrink-0 rounded-lg object-cover"
+                        />
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-ink truncate">
+                            {game.name}
+                          </p>
+                          <p className="text-xs text-ink-subtle num-tabular">
+                            {game.yearPublished} · {game.minPlayers}–{game.maxPlayers} jug. · ★{' '}
+                            {game.bggRating.toFixed(1)}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          addGameToLibrary(game, 'owned');
+                          setAddModalOpen(false);
+                        }}
+                        className="shrink-0 inline-flex min-h-9 items-center gap-1 rounded-xl bg-forest-600 px-3 text-xs font-bold text-white hover:bg-forest-700"
+                      >
+                        <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                        Sumar
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

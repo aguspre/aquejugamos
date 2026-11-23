@@ -1,0 +1,54 @@
+import { z } from 'zod';
+
+export const registerSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Email inválido'),
+  password: z
+    .string()
+    .min(8, 'La contraseña debe tener al menos 8 caracteres')
+    .max(128, 'La contraseña es demasiado larga'),
+  displayName: z
+    .string()
+    .trim()
+    .min(2, 'El nombre debe tener al menos 2 caracteres')
+    .max(80, 'El nombre es demasiado largo'),
+  bggUsername: z
+    .string()
+    .trim()
+    .min(1)
+    .max(60)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+});
+
+export const loginSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Email inválido'),
+  password: z.string().min(1, 'La contraseña es requerida'),
+});
+
+export const googleAuthSchema = z.object({
+  idToken: z.string().min(1, 'idToken es requerido'),
+});
+
+export const updateProfileSchema = z.object({
+  displayName: z.string().trim().min(2).max(80).optional(),
+  avatarUrl: z
+    .string()
+    .trim()
+    .url('URL de avatar inválida')
+    .nullable()
+    .optional()
+    .or(z.literal('').transform(() => null)),
+  bggUsername: z
+    .string()
+    .trim()
+    .min(1)
+    .max(60)
+    .nullable()
+    .optional()
+    .or(z.literal('').transform(() => null)),
+});
+
+export type RegisterInput = z.infer<typeof registerSchema>;
+export type LoginInput = z.infer<typeof loginSchema>;
+export type GoogleAuthInput = z.infer<typeof googleAuthSchema>;
+export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;

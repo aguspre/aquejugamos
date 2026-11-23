@@ -1,0 +1,26 @@
+{
+  "name": "aquejugamos",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ludoteca colaborativa para juntadas de juegos de mesa",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev --workspace=server",
+    "dev:client": "npm run dev --workspace=client",
+    "build": "npm run build --workspace=server && npm run build --workspace=client",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:generate": "npm run db:generate --workspace=server",
+    "db:migrate": "npm run db:migrate --workspace=server",
+    "db:deploy": "npm run db:deploy --workspace=server",
+    "db:studio": "npm run db:studio --workspace=server",
+    "db:validate": "npm run db:validate --workspace=server"
+  },
+  "dependencies": {
+    "@neon/config": "^1.14.6",
+    "@neon/env": "^2.1.9"
+  }
+}
