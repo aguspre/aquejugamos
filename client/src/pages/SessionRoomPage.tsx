@@ -1,6 +1,7 @@
 import {
   AlertCircle,
   ArrowLeft,
+  Ban,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -13,6 +14,7 @@ import {
   Lock,
   MapPin,
   MessageSquareQuote,
+  Pencil,
   Plus,
   RotateCcw,
   Sparkles,
@@ -25,12 +27,20 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
+import {
+  Link,
+  Navigate,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import { ApiError } from "../api/client";
 import { applyOptimisticRsvp, applyOptimisticVote } from "../api/mappers";
 import { GuestLockedView } from "../components/auth/GuestLockedView";
 import { GameCard } from "../components/game/GameCard";
 import { GameDetailDrawer } from "../components/game/GameDetailDrawer";
+import { CancelOrDeleteSessionDialog } from "../components/sessions/CancelOrDeleteSessionDialog";
+import { EditSessionModal } from "../components/sessions/EditSessionModal";
 import { FilterChipBar } from "../components/ui/FilterChipBar";
 import { OwnerAvatarStack } from "../components/ui/OwnerAvatarStack";
 import { UserAvatar } from "../components/ui/UserAvatar";
@@ -77,6 +87,7 @@ const RSVP_RING: Record<RsvpStatus, string> = {
 
 export function SessionRoomPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const {
     isAuthenticated,
@@ -90,6 +101,10 @@ export function SessionRoomPage() {
     loadSessionDetail,
     loadSessionPool,
     joinSessionByToken,
+    updateSession,
+    cancelSession,
+    reopenSession,
+    deleteSession,
     updateRsvp,
     proposeGame,
     removeProposal,
@@ -121,6 +136,8 @@ export function SessionRoomPage() {
     null,
   );
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [editSessionOpen, setEditSessionOpen] = useState(false);
+  const [deleteSessionOpen, setDeleteSessionOpen] = useState(false);
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [busyAction, setBusyAction] = useState(false);
   const removeDialogRef = useRef<HTMLDialogElement | null>(null);
@@ -370,6 +387,15 @@ export function SessionRoomPage() {
     session.proposals.map((p) => [p.game.id, p.status]),
   );
 
+  const drainOptimisticQueues = async () => {
+    await Promise.all([
+      voteQueueRef.current.catch(() => undefined),
+      rsvpQueueRef.current.catch(() => undefined),
+    ]);
+    voteSeqRef.current += 1;
+    rsvpSeqRef.current += 1;
+  };
+
   const runSessionAction = async (
     action: () => Promise<GameSession>,
     refreshPoolToo = false,
@@ -378,6 +404,7 @@ export function SessionRoomPage() {
     setErrorMsg(null);
     setActionNotice(null);
     try {
+      await drainOptimisticQueues();
       const updated = await action();
       lastConfirmedSessionRef.current = updated;
       setSession(updated);
@@ -511,9 +538,7 @@ export function SessionRoomPage() {
       }
     } catch (err) {
       const message =
-        err instanceof ApiError
-          ? err.message
-          : "No se pudo proponer el juego.";
+        err instanceof ApiError ? err.message : "No se pudo proponer el juego.";
       const isTerminalProposalError =
         err instanceof ApiError &&
         (err.code === "MAX_PROPOSALS_REACHED" ||
@@ -640,8 +665,8 @@ export function SessionRoomPage() {
           Volver a Juntadas
         </Link>
 
-        <div className="flex items-center gap-2">
-          {isAuthenticated && (
+        <div className="flex flex-wrap items-center gap-2">
+          {isAuthenticated && !isClosed && (
             <button
               type="button"
               onClick={handleCopyInvite}
@@ -668,29 +693,82 @@ export function SessionRoomPage() {
           )}
 
           {canManage && !isClosed && (
+            <>
+              <button
+                type="button"
+                disabled={busyAction}
+                onClick={() => setEditSessionOpen(true)}
+                className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-border bg-surface px-3 text-xs font-semibold text-ink hover:border-border-strong hover:bg-canvas-subtle disabled:opacity-60 transition"
+              >
+                <Pencil
+                  className="h-3.5 w-3.5 text-ink-muted"
+                  aria-hidden="true"
+                />
+                Editar
+              </button>
+
+              <button
+                type="button"
+                disabled={busyAction}
+                onClick={() =>
+                  void runSessionAction(() => toggleSessionLock(session.id))
+                }
+                className={`inline-flex min-h-9 items-center gap-1.5 rounded-xl px-3.5 text-xs font-bold transition disabled:opacity-60 ${
+                  isLocked
+                    ? "border border-border bg-surface text-ink hover:bg-canvas-subtle"
+                    : "bg-ink text-white hover:bg-forest-900"
+                }`}
+              >
+                {isLocked ? (
+                  <>
+                    <Unlock className="h-3.5 w-3.5" aria-hidden="true" />
+                    Reabrir votación
+                  </>
+                ) : (
+                  <>
+                    <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                    Cerrar votación
+                  </>
+                )}
+              </button>
+            </>
+          )}
+
+          {canManage && session.status === "cancelled" && (
             <button
               type="button"
               disabled={busyAction}
               onClick={() =>
-                void runSessionAction(() => toggleSessionLock(session.id))
+                void runSessionAction(async () => {
+                  const updated = await reopenSession(session.id);
+                  setActionNotice("La juntada volvió a estar abierta.");
+                  return updated;
+                })
               }
-              className={`inline-flex min-h-9 items-center gap-1.5 rounded-xl px-3.5 text-xs font-bold transition disabled:opacity-60 ${
-                isLocked
-                  ? "border border-border bg-surface text-ink hover:bg-canvas-subtle"
-                  : "bg-ink text-white hover:bg-forest-900"
-              }`}
+              className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-forest-200 bg-forest-50 px-3.5 text-xs font-bold text-forest-700 hover:bg-forest-100 disabled:opacity-60 transition"
             >
-              {isLocked ? (
-                <>
-                  <Unlock className="h-3.5 w-3.5" aria-hidden="true" />
-                  Reabrir votación
-                </>
-              ) : (
-                <>
-                  <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-                  Cerrar votación
-                </>
-              )}
+              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+              Reabrir juntada
+            </button>
+          )}
+
+          {canManage && (
+            <button
+              type="button"
+              disabled={busyAction}
+              onClick={() => setDeleteSessionOpen(true)}
+              aria-label={
+                isClosed ? "Eliminar juntada" : "Cancelar o eliminar juntada"
+              }
+              title={
+                isClosed ? "Eliminar juntada" : "Cancelar o eliminar juntada"
+              }
+              className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-terracotta-200 bg-terracotta-50/70 px-3 text-xs font-semibold text-terracotta-700 hover:bg-terracotta-50 hover:border-terracotta-500/50 disabled:opacity-60 transition"
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">
+                {isClosed ? "Eliminar" : "Cancelar / Eliminar"}
+              </span>
             </button>
           )}
         </div>
@@ -712,7 +790,10 @@ export function SessionRoomPage() {
           className="flex items-center justify-between gap-2 rounded-2xl border border-forest-200 bg-forest-50 px-4 py-3 text-xs font-semibold text-forest-800"
         >
           <span className="inline-flex items-center gap-2">
-            <Check className="h-4 w-4 shrink-0 text-forest-600" aria-hidden="true" />
+            <Check
+              className="h-4 w-4 shrink-0 text-forest-600"
+              aria-hidden="true"
+            />
             <span>{actionNotice}</span>
           </span>
           <button
@@ -726,6 +807,21 @@ export function SessionRoomPage() {
         </div>
       )}
 
+      {session.status === "cancelled" && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-terracotta-200 bg-terracotta-50/80 px-4 py-3 text-xs font-semibold text-terracotta-700"
+        >
+          <span className="inline-flex items-center gap-2">
+            <Ban className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>
+              Esta juntada fue cancelada. Ya no se pueden proponer ni votar
+              juegos.
+            </span>
+          </span>
+        </div>
+      )}
+
       {/* Session Hero Card */}
       <section className="rounded-3xl border border-border bg-surface p-5 sm:p-6 shadow-[var(--shadow-card)] space-y-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -733,17 +829,31 @@ export function SessionRoomPage() {
             <div className="flex flex-wrap items-center gap-2">
               <span
                 className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-0.5 text-xs font-bold ${
-                  isLocked
-                    ? "border-forest-200 bg-forest-50 text-forest-700"
-                    : "border-terracotta-100 bg-terracotta-50 text-terracotta-700"
+                  session.status === "cancelled"
+                    ? "border-terracotta-200 bg-terracotta-50 text-terracotta-700"
+                    : session.status === "completed"
+                      ? "border-border bg-canvas-subtle text-ink-muted"
+                      : isLocked
+                        ? "border-forest-200 bg-forest-50 text-forest-700"
+                        : "border-terracotta-100 bg-terracotta-50 text-terracotta-700"
                 }`}
               >
-                {isLocked ? (
+                {session.status === "cancelled" ? (
+                  <Ban className="h-3.5 w-3.5" aria-hidden="true" />
+                ) : session.status === "completed" ? (
+                  <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+                ) : isLocked ? (
                   <Lock className="h-3.5 w-3.5" aria-hidden="true" />
                 ) : (
                   <Vote className="h-3.5 w-3.5" aria-hidden="true" />
                 )}
-                {isLocked ? "Votación cerrada" : "Votación abierta"}
+                {session.status === "cancelled"
+                  ? "Cancelada"
+                  : session.status === "completed"
+                    ? "Finalizada"
+                    : isLocked
+                      ? "Votación cerrada"
+                      : "Votación abierta"}
               </span>
               <span className="text-xs font-semibold text-ink-subtle">
                 {session.groupName}
@@ -836,9 +946,10 @@ export function SessionRoomPage() {
                   <button
                     key={opt.id}
                     type="button"
+                    disabled={isClosed}
                     aria-pressed={active}
                     onClick={() => handleRsvpChange(opt.id)}
-                    className={`min-h-8 rounded-lg px-2.5 text-xs font-bold transition border ${
+                    className={`min-h-8 rounded-lg px-2.5 text-xs font-bold transition border disabled:opacity-50 disabled:cursor-not-allowed ${
                       active
                         ? opt.activeClass
                         : "border-transparent text-ink-muted hover:text-ink"
@@ -1203,28 +1314,30 @@ export function SessionRoomPage() {
                               </button>
                             )}
 
-                            <button
-                              type="button"
-                              onClick={() =>
-                                isAuthenticated
-                                  ? handleLogWinnerPlay(proposal.game.id)
-                                  : openAuthModal("signin")
-                              }
-                              className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-forest-200 bg-forest-50 px-3 text-xs font-bold text-forest-800 hover:bg-forest-100 transition"
-                            >
-                              {isAuthenticated ? (
-                                <Dices
-                                  className="h-3.5 w-3.5"
-                                  aria-hidden="true"
-                                />
-                              ) : (
-                                <Lock
-                                  className="h-3.5 w-3.5 text-ink-subtle"
-                                  aria-hidden="true"
-                                />
-                              )}
-                              Registrar partida
-                            </button>
+                            {session.status !== "cancelled" && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  isAuthenticated
+                                    ? handleLogWinnerPlay(proposal.game.id)
+                                    : openAuthModal("signin")
+                                }
+                                className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-forest-200 bg-forest-50 px-3 text-xs font-bold text-forest-800 hover:bg-forest-100 transition"
+                              >
+                                {isAuthenticated ? (
+                                  <Dices
+                                    className="h-3.5 w-3.5"
+                                    aria-hidden="true"
+                                  />
+                                ) : (
+                                  <Lock
+                                    className="h-3.5 w-3.5 text-ink-subtle"
+                                    aria-hidden="true"
+                                  />
+                                )}
+                                Registrar partida
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1462,7 +1575,7 @@ export function SessionRoomPage() {
                               </button>
                             )}
 
-                            {isLocked || isClosed ? (
+                            {session.status === "cancelled" ? null : isLocked || isClosed ? (
                               <button
                                 type="button"
                                 onClick={() =>
@@ -1666,77 +1779,77 @@ export function SessionRoomPage() {
                   : item.isProposed;
 
                 return (
-                <GameCard
-                  key={item.id}
-                  game={item}
-                  owners={item.owners}
-                  targetPlayers={confirmedCount}
-                  onSelect={setSelectedGame}
-                  actionSlot={
-                    liveProposalStatus === "accepted" ? (
-                      <div className="flex items-center justify-between gap-2 rounded-xl border border-forest-300 bg-forest-100/80 px-3 py-2 text-xs font-bold text-forest-700">
-                        <span className="inline-flex items-center gap-1.5">
-                          <CheckCircle2
-                            className="h-3.5 w-3.5 text-forest-700"
-                            aria-hidden="true"
-                          />
-                          Confirmado
-                        </span>
+                  <GameCard
+                    key={item.id}
+                    game={item}
+                    owners={item.owners}
+                    targetPlayers={confirmedCount}
+                    onSelect={setSelectedGame}
+                    actionSlot={
+                      liveProposalStatus === "accepted" ? (
+                        <div className="flex items-center justify-between gap-2 rounded-xl border border-forest-300 bg-forest-100/80 px-3 py-2 text-xs font-bold text-forest-700">
+                          <span className="inline-flex items-center gap-1.5">
+                            <CheckCircle2
+                              className="h-3.5 w-3.5 text-forest-700"
+                              aria-hidden="true"
+                            />
+                            Confirmado
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab("proposals")}
+                            className="underline hover:text-forest-900"
+                          >
+                            Ver mesa
+                          </button>
+                        </div>
+                      ) : liveIsProposed ? (
+                        <div className="flex items-center justify-between gap-2 rounded-xl border border-forest-200 bg-forest-50 px-3 py-2 text-xs font-bold text-forest-700">
+                          <span className="inline-flex items-center gap-1.5">
+                            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                            Ya propuesto
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab("proposals")}
+                            className="underline hover:text-forest-900"
+                          >
+                            Ver votos
+                          </button>
+                        </div>
+                      ) : (
                         <button
                           type="button"
-                          onClick={() => setActiveTab("proposals")}
-                          className="underline hover:text-forest-900"
+                          disabled={
+                            isLocked ||
+                            isClosed ||
+                            busyAction ||
+                            reachedProposalLimit
+                          }
+                          title={
+                            reachedProposalLimit && maxProposalsPerUser !== null
+                              ? `Alcanzaste el límite de ${maxProposalsPerUser} ${maxProposalsPerUser === 1 ? "propuesta" : "propuestas"} por integrante`
+                              : undefined
+                          }
+                          onClick={() => {
+                            setProposeError(null);
+                            setProposingGame(item);
+                            setProposalNote("");
+                          }}
+                          className="w-full inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl bg-forest-600 px-3 text-xs font-bold text-white shadow-xs hover:bg-forest-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
                         >
-                          Ver mesa
+                          {reachedProposalLimit ? (
+                            <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                          ) : (
+                            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                          )}
+                          {reachedProposalLimit && maxProposalsPerUser !== null
+                            ? `Límite alcanzado (${userProposalsCount}/${maxProposalsPerUser})`
+                            : "Proponer para votar"}
                         </button>
-                      </div>
-                    ) : liveIsProposed ? (
-                      <div className="flex items-center justify-between gap-2 rounded-xl border border-forest-200 bg-forest-50 px-3 py-2 text-xs font-bold text-forest-700">
-                        <span className="inline-flex items-center gap-1.5">
-                          <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                          Ya propuesto
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setActiveTab("proposals")}
-                          className="underline hover:text-forest-900"
-                        >
-                          Ver votos
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        disabled={
-                          isLocked ||
-                          isClosed ||
-                          busyAction ||
-                          reachedProposalLimit
-                        }
-                        title={
-                          reachedProposalLimit && maxProposalsPerUser !== null
-                            ? `Alcanzaste el límite de ${maxProposalsPerUser} ${maxProposalsPerUser === 1 ? "propuesta" : "propuestas"} por integrante`
-                            : undefined
-                        }
-                        onClick={() => {
-                          setProposeError(null);
-                          setProposingGame(item);
-                          setProposalNote("");
-                        }}
-                        className="w-full inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl bg-forest-600 px-3 text-xs font-bold text-white shadow-xs hover:bg-forest-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                      >
-                        {reachedProposalLimit ? (
-                          <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-                        ) : (
-                          <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                        )}
-                        {reachedProposalLimit && maxProposalsPerUser !== null
-                          ? `Límite alcanzado (${userProposalsCount}/${maxProposalsPerUser})`
-                          : "Proponer para votar"}
-                      </button>
-                    )
-                  }
-                />
+                      )
+                    }
+                  />
                 );
               })}
             </div>
@@ -1934,7 +2047,9 @@ export function SessionRoomPage() {
               <button
                 type="button"
                 disabled={removingProposal}
-                onClick={() => void handleConfirmRemoveProposal(proposalToRemove)}
+                onClick={() =>
+                  void handleConfirmRemoveProposal(proposalToRemove)
+                }
                 className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-terracotta-600 px-4 text-xs font-bold text-white hover:bg-terracotta-700 disabled:opacity-70 transition"
               >
                 {removingProposal ? (
@@ -1978,6 +2093,42 @@ export function SessionRoomPage() {
             : undefined
         }
         onClose={() => setSelectedGame(null)}
+      />
+
+      {/* Edit Session Modal */}
+      <EditSessionModal
+        session={editSessionOpen ? session : null}
+        onClose={() => setEditSessionOpen(false)}
+        onSave={async (sessionId, input) => {
+          await drainOptimisticQueues();
+          const updated = await updateSession(sessionId, input);
+          lastConfirmedSessionRef.current = updated;
+          setSession(updated);
+          setErrorMsg(null);
+          setActionNotice("Se actualizaron los datos de la juntada.");
+        }}
+      />
+
+      {/* Cancel or Delete Session Dialog */}
+      <CancelOrDeleteSessionDialog
+        session={deleteSessionOpen ? session : null}
+        onClose={() => setDeleteSessionOpen(false)}
+        onCancelSession={async (target) => {
+          await drainOptimisticQueues();
+          const updated = await cancelSession(target.id);
+          lastConfirmedSessionRef.current = updated;
+          setSession(updated);
+          setErrorMsg(null);
+          setActionNotice("La juntada fue marcada como cancelada.");
+        }}
+        onDeleteSession={async (target) => {
+          await drainOptimisticQueues();
+          await deleteSession(target.id);
+          navigate("/sessions", {
+            replace: true,
+            state: { notice: `Se eliminó la juntada “${target.title}”.` },
+          });
+        }}
       />
     </div>
   );

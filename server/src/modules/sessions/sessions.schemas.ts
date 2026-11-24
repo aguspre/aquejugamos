@@ -14,6 +14,19 @@ export const listSessionsQuerySchema = z.object({
   status: z.nativeEnum(SessionStatus).optional(),
 });
 
+const validSessionDate = z
+  .union([z.string().trim().min(1, 'Fecha y hora inválidas'), z.date()], {
+    errorMap: () => ({ message: 'Fecha y hora inválidas' }),
+  })
+  .pipe(
+    z.coerce
+      .date({ message: 'Fecha y hora inválidas' })
+      .refine(
+        (d) => d.getUTCFullYear() >= 2000 && d.getUTCFullYear() <= 2100,
+        'Fecha y hora fuera de rango válido',
+      ),
+  );
+
 export const createSessionSchema = z.object({
   groupId: z.string().uuid().nullable().optional(),
   title: z
@@ -21,7 +34,7 @@ export const createSessionSchema = z.object({
     .trim()
     .min(2, 'El título debe tener al menos 2 caracteres')
     .max(120, 'El título es demasiado largo'),
-  scheduledAt: z.coerce.date({ message: 'Fecha y hora inválidas' }),
+  scheduledAt: validSessionDate,
   location: z.string().trim().max(200).nullable().optional(),
   status: z.nativeEnum(SessionStatus).optional().default(SessionStatus.voting),
   votingMode: z.nativeEnum(VotingMode).optional().default(VotingMode.multi_vote),
@@ -52,6 +65,39 @@ export const updateRsvpSchema = z.object({
 export const updateSessionStatusSchema = z.object({
   status: z.nativeEnum(SessionStatus),
 });
+
+export const updateSessionSchema = z
+  .object({
+    title: z
+      .string()
+      .trim()
+      .min(2, 'El título debe tener al menos 2 caracteres')
+      .max(120, 'El título es demasiado largo')
+      .optional(),
+    scheduledAt: validSessionDate.optional(),
+    location: z
+      .string()
+      .trim()
+      .max(200, 'El lugar es demasiado largo')
+      .transform((val) => (val.length === 0 ? null : val))
+      .nullable()
+      .optional(),
+    maxProposalsPerUser: z
+      .number()
+      .int('El límite de propuestas debe ser un número entero')
+      .min(1, 'El mínimo es 1 propuesta por integrante')
+      .max(20, 'El máximo es 20 propuestas por integrante')
+      .nullable()
+      .optional(),
+  })
+  .refine(
+    (data) =>
+      data.title !== undefined ||
+      data.scheduledAt !== undefined ||
+      data.location !== undefined ||
+      data.maxProposalsPerUser !== undefined,
+    { message: 'Debés enviar al menos un campo para actualizar la juntada' },
+  );
 
 export const sessionPoolQuerySchema = z.object({
   onlyCompatible: booleanQueryParam,
@@ -93,5 +139,6 @@ export const updateProposalStatusSchema = z.object({
 
 export type ListSessionsQuery = z.infer<typeof listSessionsQuerySchema>;
 export type CreateSessionInput = z.infer<typeof createSessionSchema>;
+export type UpdateSessionInput = z.infer<typeof updateSessionSchema>;
 export type SessionPoolQuery = z.infer<typeof sessionPoolQuerySchema>;
 export type CreateProposalInput = z.infer<typeof createProposalSchema>;

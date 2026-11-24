@@ -9,13 +9,18 @@ import {
   Lock,
   LogIn,
   MapPin,
+  Pencil,
   Plus,
+  Trash2,
   UserPlus,
   Vote,
+  X,
 } from "lucide-react";
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { CancelOrDeleteSessionDialog } from "../components/sessions/CancelOrDeleteSessionDialog";
 import { CreateSessionModal } from "../components/sessions/CreateSessionModal";
+import { EditSessionModal } from "../components/sessions/EditSessionModal";
 import { OwnerAvatarStack } from "../components/ui/OwnerAvatarStack";
 import { useAppState } from "../context/AppStateContext";
 import { useAuth } from "../context/AuthContext";
@@ -42,7 +47,7 @@ const STATUS_META: Record<SessionStatus, { label: string; className: string }> =
     },
     cancelled: {
       label: "Cancelada",
-      className: "bg-canvas-subtle text-ink-subtle border-border",
+      className: "bg-terracotta-50 text-terracotta-700 border-terracotta-200",
     },
   };
 
@@ -55,19 +60,53 @@ const VOTING_MODE_LABEL: Record<VotingMode, string> = {
 export function SessionsHubPage() {
   const { isAuthenticated, isGuestSession, guestScope, openAuthModal } =
     useAuth();
-  const { isBootstrapping, activeGroup, sessions, createSession } =
-    useAppState();
+  const {
+    currentUser,
+    isBootstrapping,
+    activeGroup,
+    sessions,
+    createSession,
+    updateSession,
+    cancelSession,
+    deleteSession,
+  } = useAppState();
   const [createOpen, setCreateOpen] = useState(false);
-  const [scope, setScope] = useState<"group" | "all">("group");
+  const [editingSession, setEditingSession] = useState<GameSession | null>(null);
+  const [managingDeleteSession, setManagingDeleteSession] =
+    useState<GameSession | null>(null);
+  const [hubNotice, setHubNotice] = useState<string | null>(null);
+  const [scope, setScope] = useState<"group" | "direct" | "all">("group");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    const state = location.state as { notice?: string } | null;
+    if (state?.notice) {
+      setHubNotice(state.notice);
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.state, location.pathname, navigate]);
+
+  const activeGroupSessionsCount = activeGroup
+    ? sessions.filter((s) => s.groupId === activeGroup.id).length
+    : 0;
+  const directSessionsCount = sessions.filter((s) => s.groupId === null).length;
+  const effectiveScope =
+    scope === "direct" && directSessionsCount === 0
+      ? activeGroup
+        ? "group"
+        : "all"
+      : scope === "group" && !activeGroup
+        ? "all"
+        : scope;
 
   const visibleSessions =
-    scope === "all" || !activeGroup
+    effectiveScope === "all"
       ? sessions
-      : sessions.filter(
-          (s) => s.groupId === activeGroup.id || s.groupId === null,
-        );
+      : effectiveScope === "direct"
+        ? sessions.filter((s) => s.groupId === null)
+        : sessions.filter((s) => s.groupId === activeGroup!.id);
 
   const upcoming = visibleSessions.filter(
     (s) =>
@@ -93,11 +132,13 @@ export function SessionsHubPage() {
             <span className="text-xs font-bold uppercase tracking-wider text-forest-600">
               {isGuestSession && guestScope?.groupName
                 ? `Invitado en ${guestScope.groupName}`
-                : scope === "group" && activeGroup
-                  ? activeGroup.name
-                  : isAuthenticated
-                    ? "Todas tus juntadas"
-                    : "Modo invitado"}
+                : effectiveScope === "direct"
+                  ? "Sin grupo (invitación directa)"
+                  : effectiveScope === "group" && activeGroup
+                    ? activeGroup.name
+                    : isAuthenticated
+                      ? "Todas tus juntadas"
+                      : "Modo invitado"}
             </span>
             {isAuthenticated && (
               <Link
@@ -118,24 +159,42 @@ export function SessionsHubPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
-          {activeGroup && (
-            <div className="inline-flex rounded-xl border border-border bg-surface p-0.5">
+          {(activeGroup || directSessionsCount > 0) && (
+            <div className="inline-flex flex-wrap rounded-xl border border-border bg-surface p-0.5">
+              {activeGroup && (
+                <button
+                  type="button"
+                  aria-pressed={effectiveScope === "group"}
+                  onClick={() => setScope("group")}
+                  className={`min-h-9 rounded-lg px-3 text-xs font-bold num-tabular transition ${
+                    effectiveScope === "group"
+                      ? "bg-forest-50 text-forest-700"
+                      : "text-ink-muted hover:text-ink"
+                  }`}
+                >
+                  Grupo activo ({activeGroupSessionsCount})
+                </button>
+              )}
+              {directSessionsCount > 0 && (
+                <button
+                  type="button"
+                  aria-pressed={effectiveScope === "direct"}
+                  onClick={() => setScope("direct")}
+                  className={`min-h-9 rounded-lg px-3 text-xs font-bold num-tabular transition ${
+                    effectiveScope === "direct"
+                      ? "bg-forest-50 text-forest-700"
+                      : "text-ink-muted hover:text-ink"
+                  }`}
+                >
+                  Sin grupo ({directSessionsCount})
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => setScope("group")}
-                className={`min-h-9 rounded-lg px-3 text-xs font-bold transition ${
-                  scope === "group"
-                    ? "bg-forest-50 text-forest-700"
-                    : "text-ink-muted hover:text-ink"
-                }`}
-              >
-                Grupo activo
-              </button>
-              <button
-                type="button"
+                aria-pressed={effectiveScope === "all"}
                 onClick={() => setScope("all")}
-                className={`min-h-9 rounded-lg px-3 text-xs font-bold transition ${
-                  scope === "all"
+                className={`min-h-9 rounded-lg px-3 text-xs font-bold num-tabular transition ${
+                  effectiveScope === "all"
                     ? "bg-forest-50 text-forest-700"
                     : "text-ink-muted hover:text-ink"
                 }`}
@@ -165,6 +224,26 @@ export function SessionsHubPage() {
           </button>
         </div>
       </header>
+
+      {hubNotice && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-2 rounded-2xl border border-forest-200 bg-forest-50 px-4 py-3 text-xs font-semibold text-forest-700"
+        >
+          <span className="inline-flex items-center gap-2">
+            <Check className="h-4 w-4 shrink-0 text-forest-600" aria-hidden="true" />
+            <span>{hubNotice}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setHubNotice(null)}
+            aria-label="Cerrar aviso"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-forest-700 hover:bg-forest-100 hover:text-forest-900 transition"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+      )}
 
       {isBootstrapping ? (
         <div className="flex items-center justify-center py-16 text-ink-muted gap-2">
@@ -257,6 +336,11 @@ export function SessionsHubPage() {
                 (a, b) => b.score - a.score || b.voteCount - a.voteCount,
               )[0];
               const statusMeta = STATUS_META[session.status];
+              const canManage = Boolean(
+                isAuthenticated &&
+                  (session.canManageSession ??
+                    session.host.id === currentUser.id),
+              );
 
               return (
                 <article
@@ -265,16 +349,29 @@ export function SessionsHubPage() {
                 >
                   <div className="space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span
-                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-bold ${statusMeta.className}`}
-                      >
-                        {session.status === "voting" ? (
-                          <Vote className="h-3.5 w-3.5" aria-hidden="true" />
-                        ) : (
-                          <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-                        )}
-                        {statusMeta.label}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span
+                          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-bold ${statusMeta.className}`}
+                        >
+                          {session.status === "voting" ? (
+                            <Vote className="h-3.5 w-3.5" aria-hidden="true" />
+                          ) : (
+                            <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                          )}
+                          {statusMeta.label}
+                        </span>
+                        <span
+                          className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                            session.groupId === null
+                              ? "border-border bg-canvas-subtle text-ink-muted"
+                              : "border-forest-200/80 bg-forest-50/70 text-forest-700"
+                          }`}
+                        >
+                          {session.groupId === null
+                            ? "Sin grupo"
+                            : session.groupName}
+                        </span>
+                      </div>
 
                       <span className="text-[11px] font-semibold text-ink-subtle num-tabular">
                         {VOTING_MODE_LABEL[session.votingMode]}
@@ -406,7 +503,30 @@ export function SessionsHubPage() {
                       maxVisible={4}
                     />
 
-                    <div className="card-elevated-action flex items-center gap-2">
+                    <div className="card-elevated-action flex flex-wrap items-center justify-end gap-1.5">
+                      {canManage && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setEditingSession(session)}
+                            aria-label={`Editar ${session.title}`}
+                            title="Editar juntada"
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-canvas text-ink-muted hover:border-border-strong hover:text-ink transition"
+                          >
+                            <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setManagingDeleteSession(session)}
+                            aria-label={`Cancelar o eliminar ${session.title}`}
+                            title="Cancelar o eliminar juntada"
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-canvas text-ink-muted hover:border-terracotta-200 hover:bg-terracotta-50 hover:text-terracotta-700 transition"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                        </>
+                      )}
+
                       {isAuthenticated && (
                         <button
                           type="button"
@@ -462,26 +582,56 @@ export function SessionsHubPage() {
             Juntadas pasadas ({past.length})
           </h2>
           <div className="space-y-2.5">
-            {past.map((session) => (
-              <div
-                key={session.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface/80 px-4 py-3"
-              >
-                <div>
-                  <p className="text-sm font-bold text-ink">{session.title}</p>
-                  <p className="text-xs text-ink-subtle num-tabular">
-                    {formatSessionDate(session.scheduledAt)} ·{" "}
-                    {session.location}
-                  </p>
-                </div>
-                <Link
-                  to={`/sessions/${session.id}`}
-                  className="text-xs font-bold text-forest-600 hover:underline"
+            {past.map((session) => {
+              const statusMeta = STATUS_META[session.status];
+              const canManage = Boolean(
+                isAuthenticated &&
+                  (session.canManageSession ??
+                    session.host.id === currentUser.id),
+              );
+              return (
+                <div
+                  key={session.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface/80 px-4 py-3"
                 >
-                  Ver resumen
-                </Link>
-              </div>
-            ))}
+                  <div className="space-y-0.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-bold text-ink">
+                        {session.title}
+                      </p>
+                      <span
+                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold ${statusMeta.className}`}
+                      >
+                        {statusMeta.label}
+                      </span>
+                    </div>
+                    <p className="text-xs text-ink-subtle num-tabular">
+                      {formatSessionDate(session.scheduledAt)} ·{" "}
+                      {session.location}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {canManage && (
+                      <button
+                        type="button"
+                        onClick={() => setManagingDeleteSession(session)}
+                        aria-label={`Eliminar ${session.title}`}
+                        title="Eliminar juntada"
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-canvas text-ink-muted hover:border-terracotta-200 hover:bg-terracotta-50 hover:text-terracotta-700 transition"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    )}
+                    <Link
+                      to={`/sessions/${session.id}`}
+                      className="text-xs font-bold text-forest-600 hover:underline"
+                    >
+                      Ver resumen
+                    </Link>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </section>
       )}
@@ -492,6 +642,28 @@ export function SessionsHubPage() {
         onCreate={async (input) => {
           const created = await createSession(input);
           navigate(`/sessions/${created.id}`);
+        }}
+      />
+
+      <EditSessionModal
+        session={editingSession}
+        onClose={() => setEditingSession(null)}
+        onSave={async (sessionId, input) => {
+          const updated = await updateSession(sessionId, input);
+          setHubNotice(`Se actualizaron los datos de “${updated.title}”.`);
+        }}
+      />
+
+      <CancelOrDeleteSessionDialog
+        session={managingDeleteSession}
+        onClose={() => setManagingDeleteSession(null)}
+        onCancelSession={async (target) => {
+          await cancelSession(target.id);
+          setHubNotice(`Se canceló la juntada “${target.title}”.`);
+        }}
+        onDeleteSession={async (target) => {
+          await deleteSession(target.id);
+          setHubNotice(`Se eliminó la juntada “${target.title}”.`);
         }}
       />
     </div>

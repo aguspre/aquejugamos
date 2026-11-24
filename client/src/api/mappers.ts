@@ -116,6 +116,7 @@ export interface ApiSessionListItem {
   maxProposalsPerUser?: number | null;
   inviteToken: string;
   host: ApiUserSummary;
+  canManageSession?: boolean;
   confirmedCount: number;
   proposalsCount: number;
   acceptedProposals?: {
@@ -632,6 +633,7 @@ export function mapSessionListItem(item: ApiSessionListItem): GameSession {
     scheduledAt: item.scheduledAt,
     location: item.location ?? 'Lugar a confirmar',
     host: mappedHost,
+    canManageSession: item.canManageSession,
     status: item.status,
     votingMode: item.votingMode,
     maxVotesPerUser: item.maxVotesPerUser,

@@ -16,6 +16,7 @@ import type {
   CreateSessionInput,
   ListSessionsQuery,
   SessionPoolQuery,
+  UpdateSessionInput,
 } from './sessions.schemas.js';
 import {
   aggregateCombinedPool,
@@ -178,9 +179,10 @@ export async function assertSessionAccess(
     throw notFound('Juntada no encontrada', 'SESSION_NOT_FOUND');
   }
 
-  const isHost = session.hostId === userId;
-  const isParticipant = session.participants.length > 0;
   const isGroupMember = (session.group?.members.length ?? 0) > 0;
+  const isHost =
+    session.hostId === userId && (!session.groupId || isGroupMember);
+  const isParticipant = session.participants.length > 0;
   const isInvitedGuest = Boolean(
     scope?.isGuest &&
       ((scope.guestGroupId && session.groupId === scope.guestGroupId) ||
@@ -218,7 +220,7 @@ export async function listUserSessions(
     }
 
     accessOr = [
-      { hostId: userId },
+      { hostId: userId, groupId: null },
       { participants: { some: { userId } } },
       { group: { members: { some: { userId } } } },
     ];
@@ -231,7 +233,16 @@ export async function listUserSessions(
       OR: accessOr,
     },
     include: {
-      group: { select: { id: true, name: true } },
+      group: {
+        select: {
+          id: true,
+          name: true,
+          members: {
+            where: { userId },
+            select: { role: true },
+          },
+        },
+      },
       host: { select: USER_SUMMARY_SELECT },
       participants: {
         include: { user: { select: USER_SUMMARY_SELECT } },
@@ -286,6 +297,11 @@ export async function listUserSessions(
       maxProposalsPerUser: session.maxProposalsPerUser,
       inviteToken: session.inviteToken,
       host: session.host,
+      canManageSession:
+        !scope?.isGuest &&
+        ((session.hostId === userId &&
+          (!session.groupId || (session.group?.members.length ?? 0) > 0)) ||
+          session.group?.members[0]?.role === GroupRole.admin),
       confirmedCount: session.participants.filter((p) => p.rsvp === RsvpStatus.going)
         .length,
       proposalsCount: session.proposals.length,
@@ -440,9 +456,10 @@ export async function getSessionDetail(
     throw notFound('Juntada no encontrada', 'SESSION_NOT_FOUND');
   }
 
-  const isHost = session.hostId === userId;
-  const isParticipant = session.participants.some((p) => p.userId === userId);
   const isGroupMember = (session.group?.members.length ?? 0) > 0;
+  const isHost =
+    session.hostId === userId && (!session.groupId || isGroupMember);
+  const isParticipant = session.participants.some((p) => p.userId === userId);
   const isInvitedGuest = Boolean(
     scope?.isGuest &&
       ((scope.guestGroupId && session.groupId === scope.guestGroupId) ||
@@ -575,23 +592,155 @@ export async function updateParticipantRsvp(
   return getSessionDetail(userId, sessionId, scope);
 }
 
+async function lockAndAssertSessionManager(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  sessionId: string,
+  forbiddenMessage: string,
+) {
+  const sessionRows = await tx.$queryRaw<
+    { id: string; group_id: string | null; host_id: string; status: SessionStatus }[]
+  >`
+    SELECT id, group_id, host_id, status
+    FROM sessions
+    WHERE id = ${sessionId}::uuid
+    FOR UPDATE
+  `;
+
+  const lockedSession = sessionRows[0];
+  if (!lockedSession) {
+    throw notFound('Juntada no encontrada', 'SESSION_NOT_FOUND');
+  }
+
+  const membership = lockedSession.group_id
+    ? await tx.groupMember.findUnique({
+        where: {
+          groupId_userId: { groupId: lockedSession.group_id, userId },
+        },
+        select: { role: true },
+      })
+    : null;
+
+  // For group sessions, a removed/kicked ex-member loses host privileges
+  const isActiveHost =
+    lockedSession.host_id === userId &&
+    (!lockedSession.group_id || Boolean(membership));
+  const isGroupAdmin = membership?.role === GroupRole.admin;
+
+  if (!isActiveHost && !isGroupAdmin) {
+    throw forbidden(forbiddenMessage, 'SESSION_HOST_REQUIRED');
+  }
+
+  return lockedSession;
+}
+
+export async function updateSession(
+  userId: string,
+  sessionId: string,
+  input: UpdateSessionInput,
+) {
+  await prisma.$transaction(
+    async (tx) => {
+      const lockedSession = await lockAndAssertSessionManager(
+        tx,
+        userId,
+        sessionId,
+        'Solo el anfitrión o un administrador del grupo puede editar la juntada',
+      );
+
+      if (
+        lockedSession.status === SessionStatus.completed ||
+        lockedSession.status === SessionStatus.cancelled
+      ) {
+        throw badRequest(
+          'No se puede editar una juntada finalizada o cancelada',
+          undefined,
+          'SESSION_CLOSED',
+        );
+      }
+
+      await tx.session.update({
+        where: { id: sessionId },
+        data: {
+          ...(input.title !== undefined ? { title: input.title } : {}),
+          ...(input.scheduledAt !== undefined ? { scheduledAt: input.scheduledAt } : {}),
+          ...(input.location !== undefined ? { location: input.location } : {}),
+          ...(input.maxProposalsPerUser !== undefined
+            ? { maxProposalsPerUser: input.maxProposalsPerUser }
+            : {}),
+        },
+      });
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+  );
+
+  return getSessionDetail(userId, sessionId);
+}
+
+export async function deleteSession(userId: string, sessionId: string): Promise<void> {
+  await prisma.$transaction(
+    async (tx) => {
+      await lockAndAssertSessionManager(
+        tx,
+        userId,
+        sessionId,
+        'Solo el anfitrión o un administrador del grupo puede eliminar la juntada',
+      );
+
+      // Participants, proposals, and votes cascade via FK; PlayLogs preserve history with sessionId = null.
+      await tx.session.delete({
+        where: { id: sessionId },
+      });
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+  );
+}
+
 export async function updateSessionStatus(
   userId: string,
   sessionId: string,
   status: SessionStatus,
 ) {
-  const { isHost, isGroupAdmin } = await assertSessionAccess(userId, sessionId);
-  if (!isHost && !isGroupAdmin) {
-    throw forbidden(
-      'Solo el anfitrión o un administrador del grupo puede cambiar el estado de la juntada',
-      'SESSION_HOST_REQUIRED',
-    );
-  }
+  await prisma.$transaction(
+    async (tx) => {
+      const lockedSession = await lockAndAssertSessionManager(
+        tx,
+        userId,
+        sessionId,
+        'Solo el anfitrión o un administrador del grupo puede cambiar el estado de la juntada',
+      );
 
-  await prisma.session.update({
-    where: { id: sessionId },
-    data: { status },
-  });
+      if (lockedSession.status === status) {
+        return;
+      }
+
+      if (lockedSession.status === SessionStatus.completed) {
+        throw badRequest(
+          'No se puede cambiar el estado de una juntada ya finalizada',
+          undefined,
+          'SESSION_CLOSED',
+        );
+      }
+
+      if (
+        lockedSession.status === SessionStatus.cancelled &&
+        status !== SessionStatus.voting &&
+        status !== SessionStatus.planning
+      ) {
+        throw badRequest(
+          'Una juntada cancelada solo puede reabrirse a votación o planificación',
+          undefined,
+          'INVALID_STATUS_TRANSITION',
+        );
+      }
+
+      await tx.session.update({
+        where: { id: sessionId },
+        data: { status },
+      });
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+  );
 
   return getSessionDetail(userId, sessionId);
 }
