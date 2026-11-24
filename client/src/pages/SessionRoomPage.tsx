@@ -165,6 +165,7 @@ export function SessionRoomPage() {
       gameId: gameId ?? winners[0]?.game.id,
       sessionId: session.id,
       sessionTitle: session.title,
+      groupId: session.groupId,
       playerIds: goingParticipants.map((p) => p.user.id),
     });
   };

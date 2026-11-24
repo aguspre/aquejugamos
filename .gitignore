@@ -156,3 +156,9 @@ vite.config.ts.timestamp-*
 .nx/workspace-data
 .nx/migrate-runs
 .neon
+
+# Firebase service account credentials
+serviceAccountKey.json
+*firebase-adminsdk*.json
+server/serviceAccountKey.json
+server/*firebase-adminsdk*.json

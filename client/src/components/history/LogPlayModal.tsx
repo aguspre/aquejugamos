@@ -11,6 +11,7 @@ interface PlayerRowState {
 
 export function LogPlayModal() {
   const {
+    activeGroup,
     allGames,
     users,
     logPlayModalPrefill,
@@ -18,7 +19,13 @@ export function LogPlayModal() {
     addPlayLog,
   } = useAppState();
 
-  const { open, gameId, sessionId, sessionTitle, playerIds } = logPlayModalPrefill;
+  const { open, gameId, sessionId, sessionTitle, groupId, playerIds } =
+    logPlayModalPrefill;
+
+  const selectableUsers =
+    activeGroup.members.length > 0
+      ? activeGroup.members.map((m) => m.user)
+      : users;
 
   const [selectedGameId, setSelectedGameId] = useState(allGames[0]!.id);
   const [playedDate, setPlayedDate] = useState(() =>
@@ -40,11 +47,11 @@ export function LogPlayModal() {
     const preselectedSet = new Set(
       playerIds && playerIds.length > 0
         ? playerIds
-        : users.slice(0, 4).map((u) => u.id),
+        : selectableUsers.slice(0, 4).map((u) => u.id),
     );
 
     const nextRows: Record<string, PlayerRowState> = {};
-    for (const user of users) {
+    for (const user of selectableUsers) {
       nextRows[user.id] = {
         included: preselectedSet.has(user.id),
         score: '',
@@ -52,7 +59,7 @@ export function LogPlayModal() {
       };
     }
     setPlayerState(nextRows);
-  }, [open, gameId, playerIds, allGames, users]);
+  }, [open, gameId, playerIds, allGames, activeGroup.id]);
 
   useEffect(() => {
     if (!open) return;
@@ -66,7 +73,7 @@ export function LogPlayModal() {
   if (!open) return null;
 
   const selectedGame = allGames.find((g) => g.id === selectedGameId) ?? allGames[0]!;
-  const includedUsers = users.filter((u) => playerState[u.id]?.included);
+  const includedUsers = selectableUsers.filter((u) => playerState[u.id]?.included);
 
   const toggleUserIncluded = (userId: string) => {
     setPlayerState((prev) => {
@@ -139,6 +146,7 @@ export function LogPlayModal() {
     addPlayLog({
       sessionId,
       sessionTitle,
+      groupId: groupId !== undefined ? groupId : activeGroup.id,
       gameId: selectedGameId,
       playedAt: new Date(`${playedDate}T22:00:00`).toISOString(),
       durationMinutes: Math.max(5, Number(durationMinutes) || selectedGame.playingTimeMinutes),
@@ -271,7 +279,7 @@ export function LogPlayModal() {
               ¿Quiénes jugaron? ({includedUsers.length})
             </span>
             <div className="flex flex-wrap gap-2">
-              {users.map((user) => {
+              {selectableUsers.map((user) => {
                 const included = Boolean(playerState[user.id]?.included);
                 return (
                   <button

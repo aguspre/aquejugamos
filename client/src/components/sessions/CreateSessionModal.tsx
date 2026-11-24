@@ -9,7 +9,10 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
-import type { CreateSessionInput } from '../../context/AppStateContext';
+import {
+  useAppState,
+  type CreateSessionInput,
+} from '../../context/AppStateContext';
 import type { VotingMode } from '../../types/domain';
 
 interface CreateSessionModalProps {
@@ -49,12 +52,19 @@ export function CreateSessionModal({
   onClose,
   onCreate,
 }: CreateSessionModalProps) {
+  const { groups, activeGroup } = useAppState();
   const [title, setTitle] = useState('');
   const [dateTime, setDateTime] = useState('2026-12-04T21:00');
   const [location, setLocation] = useState('');
-  const [groupMode, setGroupMode] = useState<'group' | 'direct'>('group');
+  const [selectedGroupId, setSelectedGroupId] = useState<string>(activeGroup.id);
   const [votingMode, setVotingMode] = useState<VotingMode>('multi_vote');
   const [maxVotesPerUser, setMaxVotesPerUser] = useState(3);
+
+  useEffect(() => {
+    if (open) {
+      setSelectedGroupId(activeGroup.id);
+    }
+  }, [open, activeGroup.id]);
 
   useEffect(() => {
     if (!open) return;
@@ -71,12 +81,17 @@ export function CreateSessionModal({
     e.preventDefault();
     if (!title.trim()) return;
 
+    const chosenGroup =
+      selectedGroupId === '__direct__'
+        ? null
+        : groups.find((g) => g.id === selectedGroupId) ?? null;
+
     onCreate({
       title: title.trim(),
       scheduledAt: new Date(dateTime).toISOString(),
       location: location.trim() || 'Lugar a confirmar',
-      groupName:
-        groupMode === 'group' ? 'Los Meeples del Viernes' : 'Invitación abierta por link',
+      groupId: chosenGroup?.id ?? null,
+      groupName: chosenGroup?.name ?? 'Invitación abierta por link',
       votingMode,
       maxVotesPerUser,
     });
@@ -189,35 +204,44 @@ export function CreateSessionModal({
           <div className="space-y-2">
             <span className="flex items-center gap-1 text-xs font-bold uppercase tracking-wider text-ink-muted">
               <Users className="h-3.5 w-3.5" aria-hidden="true" />
-              Invitados
+              Grupo o invitación
             </span>
-            <div className="grid grid-cols-2 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {groups.map((group) => {
+                const active = selectedGroupId === group.id;
+                return (
+                  <button
+                    key={group.id}
+                    type="button"
+                    onClick={() => setSelectedGroupId(group.id)}
+                    className={`rounded-xl border p-3 text-left transition ${
+                      active
+                        ? 'border-forest-600 bg-forest-50/80 ring-1 ring-forest-600'
+                        : 'border-border bg-canvas/50 hover:border-border-strong'
+                    }`}
+                  >
+                    <span className="block text-sm font-bold text-ink truncate">
+                      {group.name}
+                    </span>
+                    <span className="block text-[11px] text-ink-muted mt-0.5 num-tabular">
+                      Invitar a los {group.members.length} miembros
+                    </span>
+                  </button>
+                );
+              })}
+
               <button
                 type="button"
-                onClick={() => setGroupMode('group')}
+                onClick={() => setSelectedGroupId('__direct__')}
                 className={`rounded-xl border p-3 text-left transition ${
-                  groupMode === 'group'
+                  selectedGroupId === '__direct__'
                     ? 'border-forest-600 bg-forest-50/80 ring-1 ring-forest-600'
                     : 'border-border bg-canvas/50 hover:border-border-strong'
                 }`}
               >
                 <span className="block text-sm font-bold text-ink">
-                  Los Meeples del Viernes
+                  Link directo (sin grupo)
                 </span>
-                <span className="block text-[11px] text-ink-muted mt-0.5">
-                  Invitar a los 5 del grupo
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setGroupMode('direct')}
-                className={`rounded-xl border p-3 text-left transition ${
-                  groupMode === 'direct'
-                    ? 'border-forest-600 bg-forest-50/80 ring-1 ring-forest-600'
-                    : 'border-border bg-canvas/50 hover:border-border-strong'
-                }`}
-              >
-                <span className="block text-sm font-bold text-ink">Link directo</span>
                 <span className="block text-[11px] text-ink-muted mt-0.5">
                   Compartir token por WhatsApp
                 </span>

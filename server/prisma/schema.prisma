@@ -52,6 +52,7 @@ model User {
   email         String    @unique
   passwordHash  String?   @map("password_hash")
   googleId      String?   @unique @map("google_id")
+  firebaseUid   String?   @unique @map("firebase_uid")
   displayName   String    @map("display_name")
   avatarUrl     String?   @map("avatar_url")
   bggUsername   String?   @map("bgg_username")

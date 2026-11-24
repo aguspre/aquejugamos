@@ -1,5 +1,7 @@
 export type UserGameStatus = 'owned' | 'wishlist' | 'want_to_play' | 'previously_owned';
 
+export type GroupRole = 'admin' | 'member';
+
 export type SessionStatus = 'planning' | 'voting' | 'locked' | 'completed' | 'cancelled';
 
 export type VotingMode = 'single_choice' | 'multi_vote' | 'ranked_top3';
@@ -13,6 +15,20 @@ export interface UserSummary {
   bggUsername?: string;
   initials: string;
   accentColor: string;
+}
+
+export interface GroupMember {
+  user: UserSummary;
+  role: GroupRole;
+  joinedAt: string;
+}
+
+export interface Group {
+  id: string;
+  name: string;
+  inviteCode: string;
+  createdBy: string;
+  members: GroupMember[];
 }
 
 export interface Game {
@@ -63,6 +79,7 @@ export interface SessionParticipant {
 
 export interface GameSession {
   id: string;
+  groupId: string | null;
   groupName: string;
   title: string;
   scheduledAt: string;
@@ -86,6 +103,7 @@ export interface PlayLog {
   id: string;
   sessionId?: string;
   sessionTitle?: string;
+  groupId: string | null;
   game: Game;
   playedAt: string;
   durationMinutes: number;

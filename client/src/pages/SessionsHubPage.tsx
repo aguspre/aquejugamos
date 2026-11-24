@@ -50,15 +50,23 @@ const VOTING_MODE_LABEL: Record<VotingMode, string> = {
 };
 
 export function SessionsHubPage() {
-  const { sessions, createSession } = useAppState();
+  const { activeGroup, sessions, createSession } = useAppState();
   const [createOpen, setCreateOpen] = useState(false);
+  const [scope, setScope] = useState<'group' | 'all'>('group');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const navigate = useNavigate();
 
-  const upcoming = sessions.filter(
+  const visibleSessions =
+    scope === 'all'
+      ? sessions
+      : sessions.filter(
+          (s) => s.groupId === activeGroup.id || s.groupId === null,
+        );
+
+  const upcoming = visibleSessions.filter(
     (s) => s.status === 'planning' || s.status === 'voting' || s.status === 'locked',
   );
-  const past = sessions.filter(
+  const past = visibleSessions.filter(
     (s) => s.status === 'completed' || s.status === 'cancelled',
   );
 
@@ -74,9 +82,17 @@ export function SessionsHubPage() {
       {/* Header */}
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-1">
-          <span className="text-xs font-bold uppercase tracking-wider text-forest-600">
-            Los Meeples del Viernes
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold uppercase tracking-wider text-forest-600">
+              {scope === 'group' ? activeGroup.name : 'Todos tus grupos'}
+            </span>
+            <Link
+              to="/groups"
+              className="text-xs font-semibold text-ink-subtle underline hover:text-forest-600"
+            >
+              Gestionar grupos
+            </Link>
+          </div>
           <h1 className="font-[var(--font-display)] text-3xl sm:text-4xl font-bold tracking-tight text-ink">
             Juntadas
           </h1>
@@ -86,14 +102,41 @@ export function SessionsHubPage() {
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setCreateOpen(true)}
-          className="self-start sm:self-auto inline-flex min-h-11 items-center gap-2 rounded-xl bg-forest-600 px-4.5 text-sm font-bold text-white shadow-xs hover:bg-forest-700 transition"
-        >
-          <Plus className="h-4.5 w-4.5" aria-hidden="true" />
-          Nueva juntada
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
+          <div className="inline-flex rounded-xl border border-border bg-surface p-0.5">
+            <button
+              type="button"
+              onClick={() => setScope('group')}
+              className={`min-h-9 rounded-lg px-3 text-xs font-bold transition ${
+                scope === 'group'
+                  ? 'bg-forest-50 text-forest-700'
+                  : 'text-ink-muted hover:text-ink'
+              }`}
+            >
+              Grupo activo
+            </button>
+            <button
+              type="button"
+              onClick={() => setScope('all')}
+              className={`min-h-9 rounded-lg px-3 text-xs font-bold transition ${
+                scope === 'all'
+                  ? 'bg-forest-50 text-forest-700'
+                  : 'text-ink-muted hover:text-ink'
+              }`}
+            >
+              Todas ({sessions.length})
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setCreateOpen(true)}
+            className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-forest-600 px-4.5 text-sm font-bold text-white shadow-xs hover:bg-forest-700 transition"
+          >
+            <Plus className="h-4.5 w-4.5" aria-hidden="true" />
+            Nueva juntada
+          </button>
+        </div>
       </header>
 
       {/* Upcoming / Active Sessions */}

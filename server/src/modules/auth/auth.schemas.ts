@@ -48,7 +48,30 @@ export const updateProfileSchema = z.object({
     .or(z.literal('').transform(() => null)),
 });
 
+export const syncProfileSchema = z
+  .object({
+    displayName: z.string().trim().min(2).max(80).optional(),
+    avatarUrl: z
+      .string()
+      .trim()
+      .url('URL de avatar inválida')
+      .nullable()
+      .optional()
+      .or(z.literal('').transform(() => null)),
+    bggUsername: z
+      .string()
+      .trim()
+      .min(1)
+      .max(60)
+      .nullable()
+      .optional()
+      .or(z.literal('').transform(() => null)),
+  })
+  .optional()
+  .default({});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type GoogleAuthInput = z.infer<typeof googleAuthSchema>;
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
+export type SyncProfileInput = z.infer<typeof syncProfileSchema>;

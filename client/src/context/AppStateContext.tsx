@@ -1,7 +1,9 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
 import {
   CURRENT_USER,
+  DEMO_JOINABLE_GROUP,
   MOCK_GAMES,
+  MOCK_GROUPS,
   MOCK_OWNERSHIP_BY_GAME,
   MOCK_PERSONAL_LIBRARY,
   MOCK_PLAY_LOGS,
@@ -11,6 +13,7 @@ import {
 import type {
   Game,
   GameSession,
+  Group,
   LibraryGameItem,
   PlayLog,
   PlayLogPlayer,
@@ -25,6 +28,7 @@ export interface CreateSessionInput {
   title: string;
   scheduledAt: string;
   location: string;
+  groupId: string | null;
   groupName: string;
   votingMode: VotingMode;
   maxVotesPerUser: number;
@@ -33,6 +37,7 @@ export interface CreateSessionInput {
 export interface CreatePlayLogInput {
   sessionId?: string;
   sessionTitle?: string;
+  groupId?: string | null;
   gameId: string;
   playedAt: string;
   durationMinutes: number;
@@ -43,12 +48,24 @@ export interface CreatePlayLogInput {
 interface AppStateContextValue {
   currentUser: UserSummary;
   users: UserSummary[];
+  groups: Group[];
+  activeGroupId: string;
+  activeGroup: Group;
+  setActiveGroupId: (groupId: string) => void;
   allGames: Game[];
   library: LibraryGameItem[];
   sessions: GameSession[];
   playLogs: PlayLog[];
   lastBggSyncLabel: string;
   ownershipByGame: Record<string, UserSummary[]>;
+  // Group actions
+  createGroup: (name: string) => Group;
+  joinGroupByCode: (inviteCode: string) => { group: Group; alreadyMember: boolean };
+  regenerateInviteCode: (groupId: string) => string;
+  toggleMemberRole: (groupId: string, userId: string) => void;
+  removeGroupMember: (groupId: string, userId: string) => void;
+  getUserOwnedGameCount: (userId: string) => number;
+  getGroupGameCount: (groupId: string) => number;
   // Library actions
   syncWithBgg: () => Promise<{ added: number; updated: number }>;
   updateLibraryItem: (
@@ -71,6 +88,7 @@ interface AppStateContextValue {
     gameId?: string;
     sessionId?: string;
     sessionTitle?: string;
+    groupId?: string | null;
     playerIds?: string[];
   }) => void;
   logPlayModalPrefill: {
@@ -78,6 +96,7 @@ interface AppStateContextValue {
     gameId?: string;
     sessionId?: string;
     sessionTitle?: string;
+    groupId?: string | null;
     playerIds?: string[];
   };
   closeLogPlayModal: () => void;
@@ -91,7 +110,20 @@ const RANK_POINTS: Record<number, number> = {
   3: 1,
 };
 
+function generateInviteCode(groupName: string): string {
+  const prefix = groupName
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .toUpperCase()
+    .slice(0, 7);
+  const suffix = Math.random().toString(36).substring(2, 5).toUpperCase();
+  return `${prefix || 'MESA'}-${suffix}`;
+}
+
 export function AppStateProvider({ children }: { children: ReactNode }) {
+  const [groups, setGroups] = useState<Group[]>(MOCK_GROUPS);
+  const [activeGroupId, setActiveGroupId] = useState<string>(MOCK_GROUPS[0]!.id);
   const [library, setLibrary] = useState<LibraryGameItem[]>(MOCK_PERSONAL_LIBRARY);
   const [sessions, setSessions] = useState<GameSession[]>(MOCK_SESSIONS);
   const [playLogs, setPlayLogs] = useState<PlayLog[]>(MOCK_PLAY_LOGS);
@@ -101,8 +133,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     gameId?: string;
     sessionId?: string;
     sessionTitle?: string;
+    groupId?: string | null;
     playerIds?: string[];
   }>({ open: false });
+
+  const activeGroup = useMemo(
+    () => groups.find((g) => g.id === activeGroupId) ?? groups[0]!,
+    [groups, activeGroupId],
+  );
 
   // Derive live ownership map incorporating Agustín's live library status
   const ownershipByGame = useMemo(() => {
@@ -120,6 +158,154 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     }
     return map;
   }, [library]);
+
+  const getUserOwnedGameCount = (userId: string): number => {
+    let count = 0;
+    for (const game of MOCK_GAMES) {
+      if (game.isExpansion) continue;
+      if (ownershipByGame[game.id]?.some((o) => o.id === userId)) {
+        count += 1;
+      }
+    }
+    return count;
+  };
+
+  const getGroupGameCount = (groupId: string): number => {
+    const group = groups.find((g) => g.id === groupId);
+    if (!group) return 0;
+    const memberIds = new Set(group.members.map((m) => m.user.id));
+    let count = 0;
+    for (const game of MOCK_GAMES) {
+      if (game.isExpansion) continue;
+      if (ownershipByGame[game.id]?.some((o) => memberIds.has(o.id))) {
+        count += 1;
+      }
+    }
+    return count;
+  };
+
+  const createGroup = (name: string): Group => {
+    const trimmed = name.trim();
+    const created: Group = {
+      id: `grp-${Date.now().toString(36)}`,
+      name: trimmed,
+      inviteCode: generateInviteCode(trimmed),
+      createdBy: CURRENT_USER.id,
+      members: [
+        {
+          user: CURRENT_USER,
+          role: 'admin',
+          joinedAt: new Date().toISOString(),
+        },
+      ],
+    };
+    setGroups((prev) => [created, ...prev]);
+    setActiveGroupId(created.id);
+    return created;
+  };
+
+  const joinGroupByCode = (
+    rawCode: string,
+  ): { group: Group; alreadyMember: boolean } => {
+    const normalized = rawCode.trim().toUpperCase();
+
+    const existing = groups.find((g) => g.inviteCode.toUpperCase() === normalized);
+    if (existing) {
+      const isMember = existing.members.some((m) => m.user.id === CURRENT_USER.id);
+      if (!isMember) {
+        const updated: Group = {
+          ...existing,
+          members: [
+            ...existing.members,
+            { user: CURRENT_USER, role: 'member', joinedAt: new Date().toISOString() },
+          ],
+        };
+        setGroups((prev) => prev.map((g) => (g.id === existing.id ? updated : g)));
+        setActiveGroupId(updated.id);
+        return { group: updated, alreadyMember: false };
+      }
+      setActiveGroupId(existing.id);
+      return { group: existing, alreadyMember: true };
+    }
+
+    // Demo joinable group or simulated group for any code entered
+    const joined: Group =
+      normalized === DEMO_JOINABLE_GROUP.inviteCode
+        ? {
+            ...DEMO_JOINABLE_GROUP,
+            members: [
+              ...DEMO_JOINABLE_GROUP.members,
+              { user: CURRENT_USER, role: 'member', joinedAt: new Date().toISOString() },
+            ],
+          }
+        : {
+            id: `grp-join-${Date.now().toString(36)}`,
+            name: `Mesa ${normalized}`,
+            inviteCode: normalized,
+            createdBy: MOCK_USERS[1]!.id,
+            members: [
+              {
+                user: MOCK_USERS[1]!,
+                role: 'admin',
+                joinedAt: '2026-09-10T18:00:00-03:00',
+              },
+              {
+                user: CURRENT_USER,
+                role: 'member',
+                joinedAt: new Date().toISOString(),
+              },
+            ],
+          };
+
+    setGroups((prev) => [joined, ...prev]);
+    setActiveGroupId(joined.id);
+    return { group: joined, alreadyMember: false };
+  };
+
+  const regenerateInviteCode = (groupId: string): string => {
+    let nextCode = '';
+    setGroups((prev) =>
+      prev.map((group) => {
+        if (group.id !== groupId) return group;
+        nextCode = generateInviteCode(group.name);
+        return { ...group, inviteCode: nextCode };
+      }),
+    );
+    return nextCode;
+  };
+
+  const toggleMemberRole = (groupId: string, userId: string) => {
+    setGroups((prev) =>
+      prev.map((group) => {
+        if (group.id !== groupId) return group;
+        return {
+          ...group,
+          members: group.members.map((m) =>
+            m.user.id === userId
+              ? { ...m, role: m.role === 'admin' ? 'member' : 'admin' }
+              : m,
+          ),
+        };
+      }),
+    );
+  };
+
+  const removeGroupMember = (groupId: string, userId: string) => {
+    setGroups((prev) => {
+      const next = prev
+        .map((group) => {
+          if (group.id !== groupId) return group;
+          const remaining = group.members.filter((m) => m.user.id !== userId);
+          return { ...group, members: remaining };
+        })
+        .filter((g) => g.members.some((m) => m.user.id === CURRENT_USER.id));
+
+      if (next.length > 0 && !next.some((g) => g.id === activeGroupId)) {
+        setActiveGroupId(next[0]!.id);
+      }
+      return next.length > 0 ? next : prev;
+    });
+  };
 
   const syncWithBgg = async (): Promise<{ added: number; updated: number }> => {
     await new Promise((resolve) => setTimeout(resolve, 1100));
@@ -154,9 +340,19 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '')
       .slice(0, 14);
+
+    const targetGroup = input.groupId
+      ? groups.find((g) => g.id === input.groupId)
+      : undefined;
+
+    const invitedUsers = targetGroup
+      ? targetGroup.members.map((m) => m.user)
+      : [CURRENT_USER];
+
     const newSession: GameSession = {
       id,
-      groupName: input.groupName,
+      groupId: input.groupId,
+      groupName: targetGroup?.name ?? input.groupName,
       title: input.title,
       scheduledAt: input.scheduledAt,
       location: input.location,
@@ -170,7 +366,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
             ? 3
             : input.maxVotesPerUser,
       inviteToken: `${slug || 'juntada'}-${Math.floor(100 + Math.random() * 900)}`,
-      participants: MOCK_USERS.map((user) => ({
+      participants: invitedUsers.map((user) => ({
         user,
         rsvp: user.id === CURRENT_USER.id ? 'going' : 'maybe',
       })),
@@ -249,7 +445,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         const target = session.proposals.find((p) => p.id === proposalId);
         if (!target) return session;
 
-        // Mode 1: Ranked Top 3
         if (session.votingMode === 'ranked_top3') {
           const rank = requestedRank ?? 1;
           const isRemovingSameRank = target.userVoted && target.userRank === rank;
@@ -257,7 +452,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           return {
             ...session,
             proposals: session.proposals.map((p) => {
-              // Remove previous points if this proposal held the requested rank or if it's the target
               let nextVoted = p.userVoted;
               let nextRank = p.userRank;
               let deltaVotes = 0;
@@ -278,7 +472,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
                   deltaScore += RANK_POINTS[rank] ?? 1;
                 }
               } else if (!isRemovingSameRank && p.userVoted && p.userRank === rank) {
-                // Free up this rank from the other proposal
                 nextVoted = false;
                 nextRank = undefined;
                 deltaVotes -= 1;
@@ -296,7 +489,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           };
         }
 
-        // Mode 2: Single choice (swap vote automatically)
         if (session.votingMode === 'single_choice') {
           const alreadyVoted = target.userVoted;
           return {
@@ -323,7 +515,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           };
         }
 
-        // Mode 3: Multi-vote with maxVotesPerUser cap
         const currentVotes = session.proposals.filter((p) => p.userVoted).length;
         if (!target.userVoted && currentVotes >= session.maxVotesPerUser) {
           return session;
@@ -386,6 +577,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       id: `log-${Date.now().toString(36)}`,
       sessionId: input.sessionId,
       sessionTitle: input.sessionTitle,
+      groupId: input.groupId !== undefined ? input.groupId : activeGroup.id,
       game,
       playedAt: input.playedAt,
       durationMinutes: input.durationMinutes,
@@ -409,12 +601,23 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       value={{
         currentUser: CURRENT_USER,
         users: MOCK_USERS,
+        groups,
+        activeGroupId: activeGroup.id,
+        activeGroup,
+        setActiveGroupId,
         allGames: MOCK_GAMES,
         library,
         sessions,
         playLogs,
         lastBggSyncLabel,
         ownershipByGame,
+        createGroup,
+        joinGroupByCode,
+        regenerateInviteCode,
+        toggleMemberRole,
+        removeGroupMember,
+        getUserOwnedGameCount,
+        getGroupGameCount,
         syncWithBgg,
         updateLibraryItem,
         addGameToLibrary,

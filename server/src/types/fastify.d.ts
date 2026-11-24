@@ -6,10 +6,12 @@ declare module '@fastify/jwt' {
     payload: {
       sub: string;
       email: string;
+      firebaseUid?: string;
     };
     user: {
       sub: string;
       email: string;
+      firebaseUid?: string;
     };
   }
 }

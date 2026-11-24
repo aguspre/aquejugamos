@@ -5,23 +5,37 @@ import {
   Library,
   Plus,
   RefreshCw,
+  Users,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAppState } from '../../context/AppStateContext';
-import { OwnerAvatarStack } from '../ui/OwnerAvatarStack';
+import { GroupSwitcher } from '../groups/GroupSwitcher';
 
 interface AppShellProps {
   children: ReactNode;
 }
 
 export function AppShell({ children }: AppShellProps) {
-  const { currentUser, users, library, sessions, playLogs, openLogPlayModal } =
-    useAppState();
+  const {
+    currentUser,
+    groups,
+    activeGroup,
+    library,
+    sessions,
+    playLogs,
+    openLogPlayModal,
+  } = useAppState();
 
-  const votingCount = sessions.filter((s) => s.status === 'voting').length;
+  const votingCount = sessions.filter(
+    (s) => s.status === 'voting' && (s.groupId === activeGroup.id || s.groupId === null),
+  ).length;
 
-  const navItems = [
+  const activeGroupPlayCount = playLogs.filter(
+    (l) => l.groupId === activeGroup.id,
+  ).length;
+
+  const desktopNavItems = [
     {
       to: '/sessions',
       label: 'Juntadas',
@@ -43,10 +57,20 @@ export function AppShell({ children }: AppShellProps) {
       label: 'Historial',
       shortLabel: 'Historial',
       icon: History,
-      badge: String(playLogs.length),
+      badge: String(activeGroupPlayCount),
+      badgeTone: 'neutral' as const,
+    },
+    {
+      to: '/groups',
+      label: 'Mis Grupos',
+      shortLabel: 'Grupos',
+      icon: Users,
+      badge: String(groups.length),
       badgeTone: 'neutral' as const,
     },
   ];
+
+  const mobileNavItems = desktopNavItems.slice(0, 3);
 
   return (
     <div className="min-h-dvh flex flex-col lg:flex-row">
@@ -68,33 +92,15 @@ export function AppShell({ children }: AppShellProps) {
             </div>
           </NavLink>
 
-          {/* Active Group Pill */}
-          <div className="mt-5 rounded-xl border border-border bg-canvas/80 p-3">
-            <div className="flex items-center justify-between gap-2 mb-2">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-ink-subtle">
-                Grupo activo
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-forest-50 px-2 py-0.5 text-[10px] font-bold text-forest-700 num-tabular">
-                {users.length} amigos
-              </span>
-            </div>
-            <p className="text-sm font-bold text-ink truncate">
-              Los Meeples del Viernes
-            </p>
-            <div className="mt-2">
-              <OwnerAvatarStack
-                owners={users}
-                maxVisible={5}
-                size="sm"
-                showNames={false}
-              />
-            </div>
+          {/* Interactive Active Group Switcher */}
+          <div className="mt-5">
+            <GroupSwitcher variant="sidebar" />
           </div>
         </div>
 
         {/* Navigation Links */}
         <nav aria-label="Navegación principal" className="flex-1 px-3 space-y-1">
-          {navItems.map((item) => {
+          {desktopNavItems.map((item) => {
             const Icon = item.icon;
             return (
               <NavLink
@@ -168,24 +174,21 @@ export function AppShell({ children }: AppShellProps) {
         </div>
       </aside>
 
-      {/* Mobile Top Header */}
-      <header className="sticky top-0 z-30 flex lg:hidden items-center justify-between gap-3 border-b border-border/80 bg-canvas/90 px-4 py-3 backdrop-blur-md">
-        <NavLink to="/sessions" className="flex items-center gap-2.5 min-w-0">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-forest-600 text-white shadow-xs">
+      {/* Mobile Top Header with Interactive Group Switcher */}
+      <header className="sticky top-0 z-30 flex lg:hidden items-center justify-between gap-2 border-b border-border/80 bg-canvas/92 px-3.5 py-2.5 backdrop-blur-md">
+        <div className="flex items-center gap-2 min-w-0">
+          <NavLink
+            to="/sessions"
+            aria-label="Inicio ¿A qué jugamos?"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-forest-600 text-white shadow-xs"
+          >
             <Dices className="h-4.5 w-4.5" aria-hidden="true" />
-          </span>
-          <div className="min-w-0">
-            <span className="block font-[var(--font-display)] text-base font-bold leading-tight text-ink truncate">
-              ¿A qué jugamos?
-            </span>
-            <span className="block text-[11px] font-medium text-ink-subtle truncate">
-              Los Meeples del Viernes
-            </span>
-          </div>
-        </NavLink>
+          </NavLink>
+          <GroupSwitcher variant="mobile-header" />
+        </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          <span className="inline-flex items-center gap-1 rounded-full border border-forest-200 bg-forest-50 px-2.5 py-1 text-[11px] font-bold text-forest-700">
+          <span className="hidden xs:inline-flex items-center gap-1 rounded-full border border-forest-200 bg-forest-50 px-2.5 py-1 text-[11px] font-bold text-forest-700">
             @{currentUser.bggUsername}
           </span>
           <span
@@ -205,13 +208,13 @@ export function AppShell({ children }: AppShellProps) {
         </div>
       </main>
 
-      {/* Mobile Bottom Navigation */}
+      {/* Mobile Bottom Navigation (3 clean items; Groups lives in Top Header Switcher) */}
       <nav
         aria-label="Navegación inferior"
         className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-40 lg:hidden border-t border-border bg-surface/95 backdrop-blur-md shadow-[0_-4px_20px_rgba(31,36,33,0.06)]"
       >
         <ul className="mx-auto grid max-w-md grid-cols-3 gap-1 pt-1.5">
-          {navItems.map((item) => {
+          {mobileNavItems.map((item) => {
             const Icon = item.icon;
             return (
               <li key={item.to}>

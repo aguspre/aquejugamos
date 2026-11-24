@@ -1,6 +1,7 @@
 import type {
   Game,
   GameSession,
+  Group,
   LibraryGameItem,
   PlayLog,
   SessionGameItem,
@@ -9,7 +10,7 @@ import type {
 import { createTabletopArt } from '../utils/gameArt';
 
 // ============================================================================
-// 1. Grupo de amigos (5 usuarios realistas)
+// 1. Usuarios mockeados (grupo principal + compañeros de oficina)
 // ============================================================================
 
 export const MOCK_USERS: UserSummary[] = [
@@ -48,11 +49,27 @@ export const MOCK_USERS: UserSummary[] = [
     initials: 'VP',
     accentColor: '#6A4C7D',
   },
+  {
+    id: 'u-cami',
+    displayName: 'Camila',
+    bggUsername: 'cami_dice',
+    initials: 'CD',
+    accentColor: '#B44D6B',
+  },
+  {
+    id: 'u-diego',
+    displayName: 'Diego',
+    bggUsername: 'diego_catan',
+    initials: 'DC',
+    accentColor: '#3B6E8C',
+  },
 ];
 
 export const CURRENT_USER = MOCK_USERS[0]!;
 
-const [AGUS, LUCAS, SOFIA, MATEO, VALEN] = MOCK_USERS as [
+const [AGUS, LUCAS, SOFIA, MATEO, VALEN, CAMI, DIEGO] = MOCK_USERS as [
+  UserSummary,
+  UserSummary,
   UserSummary,
   UserSummary,
   UserSummary,
@@ -61,7 +78,51 @@ const [AGUS, LUCAS, SOFIA, MATEO, VALEN] = MOCK_USERS as [
 ];
 
 // ============================================================================
-// 2. Catálogo realista de 12 juegos de mesa (variados en peso, jugadores y mecánicas)
+// 2. Grupos mockeados (2 grupos activos + 1 grupo demo para unirse con código)
+// ============================================================================
+
+export const MOCK_GROUPS: Group[] = [
+  {
+    id: 'grp-meeples',
+    name: 'Los Meeples del Viernes',
+    inviteCode: 'MEEPLES-26',
+    createdBy: AGUS.id,
+    members: [
+      { user: AGUS, role: 'admin', joinedAt: '2025-03-12T18:00:00-03:00' },
+      { user: LUCAS, role: 'admin', joinedAt: '2025-03-12T18:05:00-03:00' },
+      { user: SOFIA, role: 'member', joinedAt: '2025-03-13T11:20:00-03:00' },
+      { user: MATEO, role: 'member', joinedAt: '2025-03-14T20:10:00-03:00' },
+      { user: VALEN, role: 'member', joinedAt: '2025-04-02T15:30:00-03:00' },
+    ],
+  },
+  {
+    id: 'grp-oficina',
+    name: 'Sobremesa Oficina',
+    inviteCode: 'OFICINA-88',
+    createdBy: CAMI.id,
+    members: [
+      { user: CAMI, role: 'admin', joinedAt: '2026-01-18T13:00:00-03:00' },
+      { user: AGUS, role: 'member', joinedAt: '2026-01-19T10:15:00-03:00' },
+      { user: SOFIA, role: 'member', joinedAt: '2026-01-20T09:40:00-03:00' },
+      { user: DIEGO, role: 'member', joinedAt: '2026-02-05T17:20:00-03:00' },
+    ],
+  },
+];
+
+export const DEMO_JOINABLE_GROUP: Group = {
+  id: 'grp-domingos',
+  name: 'Domingos de Eurogames',
+  inviteCode: 'DOMINGO-99',
+  createdBy: LUCAS.id,
+  members: [
+    { user: LUCAS, role: 'admin', joinedAt: '2026-05-01T16:00:00-03:00' },
+    { user: DIEGO, role: 'member', joinedAt: '2026-05-03T18:00:00-03:00' },
+    { user: VALEN, role: 'member', joinedAt: '2026-05-04T12:00:00-03:00' },
+  ],
+};
+
+// ============================================================================
+// 3. Catálogo realista de 12 juegos de mesa (variados en peso, jugadores y mecánicas)
 // ============================================================================
 
 function makeGame(
@@ -385,7 +446,7 @@ export const ALL_MOCK_MECHANICS: string[] = Array.from(
 ).sort((a, b) => a.localeCompare(b, 'es'));
 
 // ============================================================================
-// 3. Ludoteca personal de Agustín (@aguspre)
+// 4. Ludoteca personal de Agustín (@aguspre)
 // ============================================================================
 
 const GAME_BY_ID = new Map(MOCK_GAMES.map((g) => [g.id, g]));
@@ -447,31 +508,32 @@ export const MOCK_PERSONAL_LIBRARY: LibraryGameItem[] = [
 ];
 
 // ============================================================================
-// 4. Mapa de dueños del grupo ("Los Meeples del Viernes")
+// 5. Mapa de dueños (todos los usuarios)
 // ============================================================================
 
 export const MOCK_OWNERSHIP_BY_GAME: Record<string, UserSummary[]> = {
-  'g-cascadia': [AGUS, SOFIA],
+  'g-cascadia': [AGUS, SOFIA, CAMI],
   'g-harmonies': [SOFIA, VALEN],
-  'g-azul': [LUCAS, VALEN],
+  'g-azul': [LUCAS, VALEN, CAMI],
   'g-wingspan': [AGUS, LUCAS],
   'g-wingspan-eu': [AGUS],
-  'g-7wonders': [LUCAS, MATEO],
+  'g-7wonders': [LUCAS, MATEO, DIEGO],
   'g-heat': [AGUS, MATEO],
-  'g-scout': [AGUS, SOFIA, VALEN],
-  'g-codenames': [MATEO, VALEN],
+  'g-scout': [AGUS, SOFIA, VALEN, CAMI],
+  'g-codenames': [MATEO, VALEN, DIEGO],
   'g-root': [LUCAS],
-  'g-tmars': [AGUS, LUCAS],
+  'g-tmars': [AGUS, LUCAS, DIEGO],
   'g-brass': [AGUS],
 };
 
 // ============================================================================
-// 5. Juntadas mockeadas (una activa en votación con 5 confirmados + pasadas)
+// 6. Juntadas mockeadas (asociadas a grupos)
 // ============================================================================
 
 export const MOCK_SESSIONS: GameSession[] = [
   {
     id: 'session-viernes',
+    groupId: 'grp-meeples',
     groupName: 'Los Meeples del Viernes',
     title: 'Noche de Euros + Birra en lo de Agus',
     scheduledAt: '2026-11-27T21:00:00-03:00',
@@ -492,7 +554,7 @@ export const MOCK_SESSIONS: GameSession[] = [
       {
         id: 'prop-1',
         game: getGame('g-heat'),
-        owners: MOCK_OWNERSHIP_BY_GAME['g-heat']!,
+        owners: [AGUS, MATEO],
         proposedBy: MATEO,
         note: 'Jugamos campeonato de 2 pistas con módulo de clima',
         voteCount: 4,
@@ -502,7 +564,7 @@ export const MOCK_SESSIONS: GameSession[] = [
       {
         id: 'prop-2',
         game: getGame('g-wingspan'),
-        owners: MOCK_OWNERSHIP_BY_GAME['g-wingspan']!,
+        owners: [AGUS, LUCAS],
         proposedBy: SOFIA,
         note: 'Llevemos la expansión de Europa para más variedad de aves',
         voteCount: 3,
@@ -512,7 +574,7 @@ export const MOCK_SESSIONS: GameSession[] = [
       {
         id: 'prop-3',
         game: getGame('g-7wonders'),
-        owners: MOCK_OWNERSHIP_BY_GAME['g-7wonders']!,
+        owners: [LUCAS, MATEO],
         proposedBy: LUCAS,
         note: 'Rápido para arrancar mientras llegan las pizzas',
         voteCount: 2,
@@ -523,6 +585,7 @@ export const MOCK_SESSIONS: GameSession[] = [
   },
   {
     id: 'session-domingo',
+    groupId: 'grp-meeples',
     groupName: 'Los Meeples del Viernes',
     title: 'Tarde de Pesados (Mesa de 4)',
     scheduledAt: '2026-12-06T16:30:00-03:00',
@@ -543,7 +606,7 @@ export const MOCK_SESSIONS: GameSession[] = [
       {
         id: 'prop-d1',
         game: getGame('g-brass'),
-        owners: MOCK_OWNERSHIP_BY_GAME['g-brass']!,
+        owners: [AGUS],
         proposedBy: AGUS,
         note: 'Llevo las Iron Clays',
         voteCount: 4,
@@ -554,13 +617,54 @@ export const MOCK_SESSIONS: GameSession[] = [
       {
         id: 'prop-d2',
         game: getGame('g-root'),
-        owners: MOCK_OWNERSHIP_BY_GAME['g-root']!,
+        owners: [LUCAS],
         proposedBy: LUCAS,
         note: 'Facciones base, todos ya sabemos reglas',
         voteCount: 3,
         score: 7,
         userVoted: true,
         userRank: 2,
+      },
+    ],
+  },
+  {
+    id: 'session-oficina',
+    groupId: 'grp-oficina',
+    groupName: 'Sobremesa Oficina',
+    title: 'After Office de Fillers (1 hora)',
+    scheduledAt: '2026-11-26T18:30:00-03:00',
+    location: 'Sala Comedor · Piso 4',
+    host: CAMI,
+    status: 'voting',
+    votingMode: 'single_choice',
+    maxVotesPerUser: 1,
+    inviteToken: 'oficina-26nov',
+    participants: [
+      { user: CAMI, rsvp: 'going' },
+      { user: AGUS, rsvp: 'going' },
+      { user: SOFIA, rsvp: 'going' },
+      { user: DIEGO, rsvp: 'going' },
+    ],
+    proposals: [
+      {
+        id: 'prop-o1',
+        game: getGame('g-azul'),
+        owners: [CAMI],
+        proposedBy: CAMI,
+        note: 'Se explica en 2 minutos y entra perfecto en el horario',
+        voteCount: 2,
+        score: 2,
+        userVoted: false,
+      },
+      {
+        id: 'prop-o2',
+        game: getGame('g-scout'),
+        owners: [AGUS, SOFIA, CAMI],
+        proposedBy: SOFIA,
+        note: 'Podemos meter dos partidas al hilo',
+        voteCount: 2,
+        score: 2,
+        userVoted: true,
       },
     ],
   },
@@ -576,12 +680,13 @@ export const MOCK_SESSION_POOL: SessionGameItem[] = MOCK_GAMES.map((game) => {
 });
 
 // ============================================================================
-// 6. Historial de partidas mockeado (para Paso posterior y vista previa)
+// 7. Historial de partidas mockeado (por grupo)
 // ============================================================================
 
 export const MOCK_PLAY_LOGS: PlayLog[] = [
   {
     id: 'log-1',
+    groupId: 'grp-meeples',
     sessionTitle: 'Juntada de Noviembre #1',
     game: getGame('g-cascadia'),
     playedAt: '2026-11-15T22:15:00-03:00',
@@ -596,6 +701,7 @@ export const MOCK_PLAY_LOGS: PlayLog[] = [
   },
   {
     id: 'log-2',
+    groupId: 'grp-meeples',
     sessionTitle: 'Juntada de Noviembre #1',
     game: getGame('g-scout'),
     playedAt: '2026-11-15T23:30:00-03:00',
@@ -611,6 +717,7 @@ export const MOCK_PLAY_LOGS: PlayLog[] = [
   },
   {
     id: 'log-3',
+    groupId: 'grp-meeples',
     sessionTitle: 'Especial Terraforming',
     game: getGame('g-tmars'),
     playedAt: '2026-11-02T19:00:00-03:00',
@@ -620,6 +727,21 @@ export const MOCK_PLAY_LOGS: PlayLog[] = [
       { user: AGUS, score: 89, isWinner: true },
       { user: LUCAS, score: 87, isWinner: false },
       { user: MATEO, score: 74, isWinner: false },
+    ],
+  },
+  {
+    id: 'log-4',
+    groupId: 'grp-oficina',
+    sessionTitle: 'Almuerzo extendido',
+    game: getGame('g-azul'),
+    playedAt: '2026-11-19T13:45:00-03:00',
+    durationMinutes: 35,
+    notes: 'Camila cerró dos columnas completas.',
+    players: [
+      { user: CAMI, score: 78, isWinner: true },
+      { user: AGUS, score: 66, isWinner: false },
+      { user: SOFIA, score: 61, isWinner: false },
+      { user: DIEGO, score: 54, isWinner: false },
     ],
   },
 ];

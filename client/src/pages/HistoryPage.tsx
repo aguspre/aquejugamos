@@ -18,8 +18,8 @@ import { formatShortDate } from '../utils/formatDate';
 
 export function HistoryPage() {
   const {
+    activeGroup,
     allGames,
-    users,
     playLogs,
     sessions,
     ownershipByGame,
@@ -28,14 +28,32 @@ export function HistoryPage() {
   } = useAppState();
 
   const [proposedFeedbackId, setProposedFeedbackId] = useState<string | null>(null);
-  const activeVotingSession = sessions.find((s) => s.status === 'voting') ?? sessions[0];
+  const groupMembers = useMemo(
+    () => activeGroup.members.map((m) => m.user),
+    [activeGroup.members],
+  );
+  const groupMemberIds = useMemo(
+    () => new Set(groupMembers.map((u) => u.id)),
+    [groupMembers],
+  );
+  const groupPlayLogs = useMemo(
+    () => playLogs.filter((l) => l.groupId === activeGroup.id),
+    [playLogs, activeGroup.id],
+  );
+  const activeVotingSession =
+    sessions.find((s) => s.groupId === activeGroup.id && s.status === 'voting') ??
+    sessions.find((s) => s.groupId === activeGroup.id) ??
+    sessions[0];
 
   const stats = useMemo(() => {
-    const totalMinutes = playLogs.reduce((acc, log) => acc + log.durationMinutes, 0);
+    const totalMinutes = groupPlayLogs.reduce(
+      (acc, log) => acc + log.durationMinutes,
+      0,
+    );
 
     // Most played games
     const gameCounts = new Map<string, { game: Game; count: number }>();
-    for (const log of playLogs) {
+    for (const log of groupPlayLogs) {
       const existing = gameCounts.get(log.game.id);
       if (existing) {
         existing.count += 1;
@@ -48,11 +66,11 @@ export function HistoryPage() {
       .slice(0, 4);
 
     // Win leaderboard
-    const leaderboard = users
+    const leaderboard = groupMembers
       .map((user) => {
         let played = 0;
         let wins = 0;
-        for (const log of playLogs) {
+        for (const log of groupPlayLogs) {
           const entry = log.players.find((p) => p.user.id === user.id);
           if (entry) {
             played += 1;
@@ -68,23 +86,23 @@ export function HistoryPage() {
       })
       .sort((a, b) => b.wins - a.wins || b.winRate - a.winRate);
 
-    // Shelf of Shame (owned by at least one member, base games, 0 logged plays)
-    const playedGameIds = new Set(playLogs.map((l) => l.game.id));
+    // Shelf of Shame (owned by at least one member of activeGroup, base games, 0 logged plays)
+    const playedGameIds = new Set(groupPlayLogs.map((l) => l.game.id));
     const shelfOfShame = allGames.filter(
       (g) =>
         !g.isExpansion &&
         !playedGameIds.has(g.id) &&
-        (ownershipByGame[g.id]?.length ?? 0) > 0,
+        (ownershipByGame[g.id] ?? []).some((o) => groupMemberIds.has(o.id)),
     );
 
     return {
-      totalPlays: playLogs.length,
+      totalPlays: groupPlayLogs.length,
       totalHours: Math.round((totalMinutes / 60) * 10) / 10,
       mostPlayed,
       leaderboard,
       shelfOfShame,
     };
-  }, [playLogs, users, allGames, ownershipByGame]);
+  }, [groupPlayLogs, groupMembers, groupMemberIds, allGames, ownershipByGame]);
 
   const handleProposeShameGame = (game: Game) => {
     if (!activeVotingSession) return;
@@ -103,7 +121,7 @@ export function HistoryPage() {
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-1">
           <span className="text-xs font-bold uppercase tracking-wider text-forest-600">
-            Los Meeples del Viernes
+            {activeGroup.name}
           </span>
           <h1 className="font-[var(--font-display)] text-3xl sm:text-4xl font-bold tracking-tight text-ink">
             Historial & Estadísticas
@@ -282,7 +300,7 @@ export function HistoryPage() {
       <section className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-extrabold uppercase tracking-wider text-ink-subtle">
-            Feed de partidas jugadas ({playLogs.length})
+            Feed de partidas jugadas ({groupPlayLogs.length})
           </h2>
           {activeVotingSession && (
             <Link
@@ -295,7 +313,7 @@ export function HistoryPage() {
         </div>
 
         <div className="space-y-3.5">
-          {playLogs.map((log) => {
+          {groupPlayLogs.map((log) => {
             const winners = log.players.filter((p) => p.isWinner);
             return (
               <article
@@ -390,7 +408,7 @@ export function HistoryPage() {
           })}
         </div>
 
-        {playLogs.length === 0 && (
+        {groupPlayLogs.length === 0 && (
           <div className="rounded-2xl border border-dashed border-border-strong bg-surface/70 p-10 text-center space-y-2">
             <Dices className="mx-auto h-8 w-8 text-ink-subtle" aria-hidden="true" />
             <p className="font-[var(--font-display)] text-lg font-bold text-ink">
