@@ -3,6 +3,8 @@ import {
   ArrowUpDown,
   Check,
   CheckCircle2,
+  Clock,
+  Dices,
   Library,
   Loader2,
   Pencil,
@@ -11,6 +13,7 @@ import {
   Search,
   Sparkles,
   Trash2,
+  Users,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
@@ -39,6 +42,34 @@ const STATUS_TABS: { id: "all" | UserGameStatus; label: string }[] = [
   { id: "want_to_play", label: "Quiero jugar" },
   { id: "wishlist", label: "Wishlist" },
 ];
+
+function BggSearchThumbnail({
+  src,
+  name,
+}: {
+  src: string | null;
+  name: string;
+}) {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const showImage = Boolean(src && failedSrc !== src);
+
+  return (
+    <div className="h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-border bg-canvas-subtle flex items-center justify-center">
+      {showImage ? (
+        <img
+          src={src!}
+          alt={`Portada de ${name}`}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setFailedSrc(src)}
+          className="h-full w-full object-cover"
+        />
+      ) : (
+        <Dices className="h-5 w-5 text-ink-subtle/70" aria-hidden="true" />
+      )}
+    </div>
+  );
+}
 
 export function LibraryPage() {
   const { isAuthenticated, loading: authLoading } = useAuth();
@@ -116,6 +147,15 @@ export function LibraryPage() {
       cancelled = true;
     };
   }, [isAuthenticated, lastBggSyncLabel]);
+
+  useEffect(() => {
+    if (!addModalOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAddModalOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [addModalOpen]);
 
   useEffect(() => {
     if (!gameToRemove || removingGame) return;
@@ -813,7 +853,7 @@ export function LibraryPage() {
             onClick={() => setAddModalOpen(false)}
             className="fixed inset-0 bg-ink/45 backdrop-blur-[2px]"
           />
-          <div className="relative z-10 flex max-h-[85dvh] w-full sm:max-w-lg flex-col overflow-hidden rounded-t-3xl sm:rounded-3xl border border-border bg-surface shadow-[var(--shadow-floating)]">
+          <div className="relative z-10 flex max-h-[85dvh] w-full sm:max-w-xl flex-col overflow-hidden rounded-t-3xl sm:rounded-3xl border border-border bg-surface shadow-[var(--shadow-floating)]">
             <div className="flex items-center justify-between border-b border-border px-5 py-4">
               <div>
                 <span className="text-[11px] font-bold uppercase tracking-wider text-forest-600">
@@ -892,20 +932,54 @@ export function LibraryPage() {
                   {bggResults.map((item) => {
                     const isImporting = importingBggId === item.bggId;
                     const alreadyInLibrary = Boolean(item.inLibraryStatus);
+                    const playersLabel =
+                      item.minPlayers && item.maxPlayers
+                        ? item.minPlayers === item.maxPlayers
+                          ? `${item.minPlayers} jug.`
+                          : `${item.minPlayers}–${item.maxPlayers} jug.`
+                        : null;
                     return (
                       <li
                         key={item.bggId}
-                        className="flex items-center justify-between gap-3 rounded-xl border border-border bg-canvas/50 p-3"
+                        className="flex items-center justify-between gap-3 rounded-xl border border-border bg-canvas/50 p-2.5 sm:p-3"
                       >
-                        <div className="min-w-0">
-                          <p className="text-sm font-bold text-ink truncate">
-                            {item.name}
-                          </p>
-                          <p className="text-xs text-ink-subtle num-tabular">
-                            {item.yearPublished ?? "Sin año"} · BGG #
-                            {item.bggId}
-                            {item.isExpansion ? " · Expansión" : ""}
-                          </p>
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <BggSearchThumbnail
+                            src={item.thumbnailUrl}
+                            name={item.name}
+                          />
+                          <div className="min-w-0 flex-1 space-y-0.5">
+                            <p className="text-sm font-bold text-ink truncate">
+                              {item.name}
+                            </p>
+                            <p className="text-xs text-ink-subtle num-tabular">
+                              {item.yearPublished ?? "Sin año"} · BGG #
+                              {item.bggId}
+                              {item.isExpansion ? " · Expansión" : ""}
+                            </p>
+                            {(playersLabel || item.playingTimeMinutes) && (
+                              <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px] font-medium text-ink-muted num-tabular">
+                                {playersLabel && (
+                                  <span className="inline-flex items-center gap-1">
+                                    <Users
+                                      className="h-3 w-3 opacity-70"
+                                      aria-hidden="true"
+                                    />
+                                    {playersLabel}
+                                  </span>
+                                )}
+                                {item.playingTimeMinutes && (
+                                  <span className="inline-flex items-center gap-1">
+                                    <Clock
+                                      className="h-3 w-3 opacity-70"
+                                      aria-hidden="true"
+                                    />
+                                    {item.playingTimeMinutes} min
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         </div>
 
                         {alreadyInLibrary ? (

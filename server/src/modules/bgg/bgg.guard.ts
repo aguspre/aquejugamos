@@ -1,11 +1,13 @@
 import { getEnv } from '../../config/env.js';
 import { conflict, tooManyRequests } from '../../utils/errors.js';
-import type { BggSearchItem } from './bgg.types.js';
+import type { BggSearchItem, BggSearchPreview } from './bgg.types.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_SEARCH_CACHE_ENTRIES = 300;
+const DEFAULT_MAX_PREVIEW_CACHE_ENTRIES = 600;
+const DEFAULT_PREVIEW_CACHE_TTL_MS = 60 * MINUTE_MS;
 
 interface SyncRecord {
   timestamp: number;
@@ -14,6 +16,11 @@ interface SyncRecord {
 
 interface SearchCacheEntry {
   results: BggSearchItem[];
+  expiresAt: number;
+}
+
+interface PreviewCacheEntry {
+  preview: BggSearchPreview;
   expiresAt: number;
 }
 
@@ -33,6 +40,8 @@ export interface BggGuardConfig {
   importRateLimitPerHour?: number;
   searchCacheTtlMs?: number;
   maxSearchCacheEntries?: number;
+  previewCacheTtlMs?: number;
+  maxPreviewCacheEntries?: number;
   nowFn?: () => number;
 }
 
@@ -56,6 +65,8 @@ export class BggGuard {
   private readonly importRateLimitPerHour: number;
   private readonly searchCacheTtlMs: number;
   private readonly maxSearchCacheEntries: number;
+  private readonly previewCacheTtlMs: number;
+  private readonly maxPreviewCacheEntries: number;
   private readonly nowFn: () => number;
 
   private readonly syncHistory = new Map<string, SyncRecord[]>();
@@ -63,6 +74,7 @@ export class BggGuard {
   private readonly searchWindows = new Map<string, number[]>();
   private readonly importWindows = new Map<string, number[]>();
   private readonly searchCache = new Map<string, SearchCacheEntry>();
+  private readonly previewCache = new Map<number, PreviewCacheEntry>();
   private readonly inFlightSearches = new Map<string, Promise<BggSearchItem[]>>();
 
   constructor(config: BggGuardConfig = {}) {
@@ -88,6 +100,9 @@ export class BggGuard {
       (env?.BGG_SEARCH_CACHE_TTL_MINUTES ?? 15) * MINUTE_MS;
     this.maxSearchCacheEntries =
       config.maxSearchCacheEntries ?? DEFAULT_MAX_SEARCH_CACHE_ENTRIES;
+    this.previewCacheTtlMs = config.previewCacheTtlMs ?? DEFAULT_PREVIEW_CACHE_TTL_MS;
+    this.maxPreviewCacheEntries =
+      config.maxPreviewCacheEntries ?? DEFAULT_MAX_PREVIEW_CACHE_ENTRIES;
     this.nowFn = config.nowFn ?? (() => Date.now());
   }
 
@@ -341,6 +356,42 @@ export class BggGuard {
     this.inFlightSearches.set(normalizedKey, promise);
     const results = await promise;
     return { results, fromCache: false };
+  }
+
+  public getCachedThingPreviews(bggIds: number[]): Map<number, BggSearchPreview> {
+    const now = this.nowFn();
+    const hits = new Map<number, BggSearchPreview>();
+
+    for (const bggId of bggIds) {
+      const entry = this.previewCache.get(bggId);
+      if (!entry) continue;
+      if (entry.expiresAt <= now) {
+        this.previewCache.delete(bggId);
+        continue;
+      }
+      // Refresh LRU position
+      this.previewCache.delete(bggId);
+      this.previewCache.set(bggId, entry);
+      hits.set(bggId, entry.preview);
+    }
+
+    return hits;
+  }
+
+  public cacheThingPreviews(previews: BggSearchPreview[]): void {
+    const expiresAt = this.nowFn() + this.previewCacheTtlMs;
+
+    for (const preview of previews) {
+      if (this.previewCache.has(preview.bggId)) {
+        this.previewCache.delete(preview.bggId);
+      } else if (this.previewCache.size >= this.maxPreviewCacheEntries) {
+        const oldestKey = this.previewCache.keys().next().value;
+        if (oldestKey !== undefined) {
+          this.previewCache.delete(oldestKey);
+        }
+      }
+      this.previewCache.set(preview.bggId, { preview, expiresAt });
+    }
   }
 }
 

@@ -38,6 +38,15 @@ export interface BggSearchItem {
   isExpansion: boolean;
 }
 
+export interface BggSearchPreview {
+  bggId: number;
+  thumbnailUrl: string | null;
+  imageUrl: string | null;
+  minPlayers: number | null;
+  maxPlayers: number | null;
+  playingTimeMinutes: number | null;
+}
+
 export interface BggSyncSummary {
   bggUsername: string;
   totalInBgg: number;

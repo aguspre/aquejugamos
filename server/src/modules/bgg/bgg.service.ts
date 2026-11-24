@@ -6,7 +6,7 @@ import { invalidateFirebaseUserCacheByUserId } from '../auth/auth.service.js';
 import { getBggClient } from './bgg.client.js';
 import { getBggGuard, type BggSyncQuotaStatus } from './bgg.guard.js';
 import { bggUsernameSchema, type BggImportBody } from './bgg.schemas.js';
-import type { BggGameDetails, BggSyncSummary } from './bgg.types.js';
+import type { BggGameDetails, BggSearchPreview, BggSyncSummary } from './bgg.types.js';
 
 function decimalToNumber(value: Prisma.Decimal | null | undefined): number | null {
   return value !== null && value !== undefined ? Number(value) : null;
@@ -286,6 +286,8 @@ export async function syncUserBggCollection(
   }
 }
 
+const SEARCH_RESULTS_LIMIT = 20;
+
 export async function searchBggCatalog(userId: string, query: string, exact = false) {
   const guard = getBggGuard();
   guard.assertSearchRateLimit(userId);
@@ -293,7 +295,7 @@ export async function searchBggCatalog(userId: string, query: string, exact = fa
   const { results: rawResults } = await guard.getOrFetchSearch(query, exact, () =>
     getBggClient().searchGames(query, exact),
   );
-  const results = rawResults.slice(0, 30);
+  const results = rawResults.slice(0, SEARCH_RESULTS_LIMIT);
   if (results.length === 0) {
     return [];
   }
@@ -305,6 +307,7 @@ export async function searchBggCatalog(userId: string, query: string, exact = fa
     select: {
       id: true,
       bggId: true,
+      imageUrl: true,
       thumbnailUrl: true,
       minPlayers: true,
       maxPlayers: true,
@@ -317,15 +320,52 @@ export async function searchBggCatalog(userId: string, query: string, exact = fa
   });
 
   const cachedByBggId = new Map(cachedGames.map((g) => [g.bggId, g]));
+  const idsMissingDbThumbnail = bggIds.filter((bggId) => {
+    const cached = cachedByBggId.get(bggId);
+    return !cached || (!cached.thumbnailUrl && !cached.imageUrl);
+  });
+
+  const previewByBggId = guard.getCachedThingPreviews(idsMissingDbThumbnail);
+  const idsToFetchPreviews = idsMissingDbThumbnail.filter(
+    (bggId) => !previewByBggId.has(bggId),
+  );
+
+  if (idsToFetchPreviews.length > 0) {
+    try {
+      const fetchedDetails = await getBggClient().fetchThingsByIds(idsToFetchPreviews, {
+        includeStats: false,
+      });
+      const fetchedPreviews: BggSearchPreview[] = fetchedDetails.map((details) => ({
+        bggId: details.bggId,
+        thumbnailUrl: details.thumbnailUrl,
+        imageUrl: details.imageUrl,
+        minPlayers: details.minPlayers,
+        maxPlayers: details.maxPlayers,
+        playingTimeMinutes: details.playingTimeMinutes,
+      }));
+      guard.cacheThingPreviews(fetchedPreviews);
+      for (const preview of fetchedPreviews) {
+        previewByBggId.set(preview.bggId, preview);
+      }
+    } catch {
+      // If lightweight thumbnail enrichment fails, degrade gracefully and still return search results
+    }
+  }
 
   return results.map((item) => {
     const cached = cachedByBggId.get(item.bggId);
+    const preview = previewByBggId.get(item.bggId);
     return {
       ...item,
-      thumbnailUrl: cached?.thumbnailUrl ?? null,
-      minPlayers: cached?.minPlayers ?? null,
-      maxPlayers: cached?.maxPlayers ?? null,
-      playingTimeMinutes: cached?.playingTimeMinutes ?? null,
+      thumbnailUrl:
+        cached?.thumbnailUrl ??
+        cached?.imageUrl ??
+        preview?.thumbnailUrl ??
+        preview?.imageUrl ??
+        null,
+      minPlayers: cached?.minPlayers ?? preview?.minPlayers ?? null,
+      maxPlayers: cached?.maxPlayers ?? preview?.maxPlayers ?? null,
+      playingTimeMinutes: cached?.playingTimeMinutes ?? preview?.playingTimeMinutes ?? null,
       inLibraryStatus: cached?.userGames[0]?.status ?? null,
     };
   });
