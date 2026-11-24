@@ -277,6 +277,11 @@ export async function getInvitePreview(query: InvitePreviewQuery) {
         id: true,
         name: true,
         inviteCode: true,
+        _count: {
+          select: {
+            members: true,
+          },
+        },
         sessions: {
           where: {
             status: {
@@ -311,6 +316,7 @@ export async function getInvitePreview(query: InvitePreviewQuery) {
       groupId: group.id,
       groupName: group.name,
       inviteCode: group.inviteCode,
+      membersCount: group._count.members,
       activeSession,
     };
   }
@@ -321,8 +327,19 @@ export async function getInvitePreview(query: InvitePreviewQuery) {
       id: true,
       title: true,
       scheduledAt: true,
+      location: true,
       status: true,
+      host: { select: { displayName: true } },
       group: { select: { name: true } },
+      participants: {
+        where: { rsvp: RsvpStatus.going },
+        select: { userId: true },
+      },
+      _count: {
+        select: {
+          proposals: true,
+        },
+      },
     },
   });
 
@@ -343,7 +360,11 @@ export async function getInvitePreview(query: InvitePreviewQuery) {
     sessionTitle: session.title,
     groupName: session.group?.name ?? 'Invitación directa',
     scheduledAt: session.scheduledAt,
+    location: session.location,
     status: session.status,
+    hostName: session.host.displayName,
+    confirmedCount: session.participants.length,
+    proposalsCount: session._count.proposals,
   };
 }
 

@@ -1,0 +1,79 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "headers": [
+    {
+      "source": "/og-image.jpg",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=86400, stale-while-revalidate=604800"
+        }
+      ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/sessions/:sessionId",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": "(?i).*(whatsapp|facebookexternalhit|facebot|meta-externalagent|twitterbot|telegrambot|discordbot|slackbot|linkedinbot|skypeuripreview|applebot|embedly|viber|vkshare|pinterest|googlebot|bingbot|opengraph|linkpreview).*"
+        },
+        {
+          "type": "query",
+          "key": "invite",
+          "value": "(?<invite>.+)"
+        }
+      ],
+      "destination": "/api/og-preview?kind=session&sessionId=:sessionId&invite=:invite"
+    },
+    {
+      "source": "/join/:inviteCode",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": "(?i).*(whatsapp|facebookexternalhit|facebot|meta-externalagent|twitterbot|telegrambot|discordbot|slackbot|linkedinbot|skypeuripreview|applebot|embedly|viber|vkshare|pinterest|googlebot|bingbot|opengraph|linkpreview).*"
+        }
+      ],
+      "destination": "/api/og-preview?kind=group&inviteCode=:inviteCode"
+    },
+    {
+      "source": "/welcome",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": "(?i).*(whatsapp|facebookexternalhit|facebot|meta-externalagent|twitterbot|telegrambot|discordbot|slackbot|linkedinbot|skypeuripreview|applebot|embedly|viber|vkshare|pinterest|googlebot|bingbot|opengraph|linkpreview).*"
+        },
+        {
+          "type": "query",
+          "key": "sessionInvite",
+          "value": "(?<sessionInvite>.+)"
+        }
+      ],
+      "destination": "/api/og-preview?kind=session&invite=:sessionInvite"
+    },
+    {
+      "source": "/welcome",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": "(?i).*(whatsapp|facebookexternalhit|facebot|meta-externalagent|twitterbot|telegrambot|discordbot|slackbot|linkedinbot|skypeuripreview|applebot|embedly|viber|vkshare|pinterest|googlebot|bingbot|opengraph|linkpreview).*"
+        },
+        {
+          "type": "query",
+          "key": "groupInvite",
+          "value": "(?<groupInvite>.+)"
+        }
+      ],
+      "destination": "/api/og-preview?kind=group&inviteCode=:groupInvite"
+    },
+    {
+      "source": "/((?!api/|assets/|images/|.*\\.[a-zA-Z0-9]+$).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

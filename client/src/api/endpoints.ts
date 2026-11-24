@@ -29,6 +29,7 @@ export interface InvitePreviewGroup {
   groupId: string;
   groupName: string;
   inviteCode: string;
+  membersCount?: number;
   activeSession: {
     id: string;
     title: string;
@@ -43,7 +44,11 @@ export interface InvitePreviewSession {
   sessionTitle: string;
   groupName: string;
   scheduledAt: string;
+  location?: string | null;
   status: SessionStatus;
+  hostName?: string;
+  confirmedCount?: number;
+  proposalsCount?: number;
 }
 
 export type InvitePreview = InvitePreviewGroup | InvitePreviewSession;
