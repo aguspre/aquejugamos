@@ -137,13 +137,13 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete('/:sessionId/proposals/:proposalId', async (request) => {
     const { sessionId, proposalId } = proposalParamsSchema.parse(request.params);
-    const session = await deleteSessionProposal(
+    const { session, refundedVotesCount } = await deleteSessionProposal(
       request.user.sub,
       sessionId,
       proposalId,
       getSessionScope(request),
     );
-    return { session };
+    return { session, refundedVotesCount };
   });
 
   app.post('/:sessionId/proposals/:proposalId/vote', async (request) => {

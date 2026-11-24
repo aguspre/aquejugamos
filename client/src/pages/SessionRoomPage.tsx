@@ -17,10 +17,12 @@ import {
   RotateCcw,
   Sparkles,
   ThumbsUp,
+  Trash2,
   Trophy,
   Unlock,
   Users,
   Vote,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
@@ -42,6 +44,7 @@ import type {
   GameSession,
   RsvpStatus,
   SessionGameItem,
+  SessionProposal,
 } from "../types/domain";
 import { DEFAULT_GAME_FILTERS, filterGames } from "../utils/filterGames";
 import { formatSessionDate } from "../utils/formatDate";
@@ -89,6 +92,7 @@ export function SessionRoomPage() {
     joinSessionByToken,
     updateRsvp,
     proposeGame,
+    removeProposal,
     updateProposalStatus,
     toggleVote,
     toggleSessionLock,
@@ -108,8 +112,17 @@ export function SessionRoomPage() {
   const [selectedGame, setSelectedGame] = useState<Game | null>(null);
   const [proposingGame, setProposingGame] = useState<Game | null>(null);
   const [proposalNote, setProposalNote] = useState("");
+  const [proposalToRemoveId, setProposalToRemoveId] = useState<string | null>(
+    null,
+  );
+  const [removingProposal, setRemovingProposal] = useState(false);
+  const [removeProposalError, setRemoveProposalError] = useState<string | null>(
+    null,
+  );
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [busyAction, setBusyAction] = useState(false);
+  const removeDialogRef = useRef<HTMLDialogElement | null>(null);
   const voteSeqRef = useRef(0);
   const voteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const rsvpSeqRef = useRef(0);
@@ -173,6 +186,26 @@ export function SessionRoomPage() {
     setLoading(true);
     void fetchRoomData();
   }, [canLoadRoom, fetchRoomData]);
+
+  const proposalToRemove = useMemo(
+    () =>
+      proposalToRemoveId && session
+        ? (session.proposals.find((p) => p.id === proposalToRemoveId) ?? null)
+        : null,
+    [proposalToRemoveId, session],
+  );
+
+  useEffect(() => {
+    const dialog = removeDialogRef.current;
+    if (!dialog) return;
+    if (proposalToRemove) {
+      if (!dialog.open) {
+        dialog.showModal();
+      }
+    } else if (dialog.open) {
+      dialog.close();
+    }
+  }, [proposalToRemove]);
 
   const poolMechanics = useMemo(
     () =>
@@ -310,6 +343,7 @@ export function SessionRoomPage() {
   ) => {
     setBusyAction(true);
     setErrorMsg(null);
+    setActionNotice(null);
     try {
       const updated = await action();
       lastConfirmedSessionRef.current = updated;
@@ -374,7 +408,7 @@ export function SessionRoomPage() {
   };
 
   const handleVote = (proposalId: string, requestedRank?: number) => {
-    if (!session) return;
+    if (!session || busyAction || removingProposal) return;
     const seq = ++voteSeqRef.current;
     const baseSnapshot = session;
     const targetProposal = baseSnapshot.proposals.find(
@@ -429,6 +463,75 @@ export function SessionRoomPage() {
     await runSessionAction(() => proposeGame(session.id, game, note), true);
     setProposingGame(null);
     setProposalNote("");
+  };
+
+  const closeRemoveProposalModal = () => {
+    if (removingProposal) return;
+    setProposalToRemoveId(null);
+    setRemoveProposalError(null);
+  };
+
+  const handleConfirmRemoveProposal = async (proposal: SessionProposal) => {
+    setRemovingProposal(true);
+    setBusyAction(true);
+    setRemoveProposalError(null);
+    setActionNotice(null);
+    try {
+      // Wait for any in-flight optimistic vote or RSVP to settle before deleting the proposal
+      await Promise.all([
+        voteQueueRef.current.catch(() => undefined),
+        rsvpQueueRef.current.catch(() => undefined),
+      ]);
+      voteSeqRef.current += 1;
+      rsvpSeqRef.current += 1;
+
+      const { session: updated, refundedVotesCount } = await removeProposal(
+        session.id,
+        proposal.id,
+      );
+      lastConfirmedSessionRef.current = updated;
+      setSession(updated);
+      setErrorMsg(null);
+      setProposalToRemoveId(null);
+      setRemoveProposalError(null);
+
+      const votesMsg =
+        refundedVotesCount > 0
+          ? ` y se ${refundedVotesCount === 1 ? "devolvió 1 voto disponible" : `devolvieron ${refundedVotesCount} votos disponibles`}`
+          : "";
+      setActionNotice(
+        `Se quitó “${proposal.game.name}” de la votación${votesMsg}.`,
+      );
+
+      void loadSessionPool(updated.id)
+        .then((pool) => setSessionPool(pool))
+        .catch(() => {
+          // Pool refresh failure does not revert a confirmed removal
+        });
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : "No se pudo quitar el juego de la votación.";
+      setRemoveProposalError(message);
+
+      if (
+        err instanceof ApiError &&
+        (err.code === "PROPOSAL_NOT_FOUND" ||
+          err.code === "PROPOSAL_ALREADY_ACCEPTED" ||
+          err.code === "SESSION_VOTING_CLOSED")
+      ) {
+        void loadSessionDetail(session.id)
+          .then((fresh) => {
+            lastConfirmedSessionRef.current = fresh;
+            setSession(fresh);
+          })
+          .catch(() => undefined);
+      }
+    } finally {
+      setRemovingProposal(false);
+      setBusyAction(false);
+    }
   };
 
   const handleLogWinnerPlay = (gameId?: string) => {
@@ -521,6 +624,26 @@ export function SessionRoomPage() {
         >
           <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span>{errorMsg}</span>
+        </div>
+      )}
+
+      {actionNotice && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-2 rounded-2xl border border-forest-200 bg-forest-50 px-4 py-3 text-xs font-semibold text-forest-800"
+        >
+          <span className="inline-flex items-center gap-2">
+            <Check className="h-4 w-4 shrink-0 text-forest-600" aria-hidden="true" />
+            <span>{actionNotice}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setActionNotice(null)}
+            aria-label="Cerrar aviso"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-forest-700 hover:bg-forest-100 hover:text-forest-900 transition"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
         </div>
       )}
 
@@ -1077,6 +1200,10 @@ export function SessionRoomPage() {
                     session.votingMode === "multi_vote" &&
                     votesRemaining === 0) ||
                   hasLockedSingleVote;
+                const canRemoveProposal =
+                  !isLocked &&
+                  !isClosed &&
+                  (proposal.proposedBy.id === currentUser.id || canManage);
 
                 return (
                   <article
@@ -1192,6 +1319,26 @@ export function SessionRoomPage() {
                           />
 
                           <div className="flex flex-wrap items-center gap-2">
+                            {canRemoveProposal && (
+                              <button
+                                type="button"
+                                disabled={busyAction}
+                                onClick={() => {
+                                  setRemoveProposalError(null);
+                                  setProposalToRemoveId(proposal.id);
+                                }}
+                                aria-label={`Quitar ${proposal.game.name} de la votación`}
+                                title="Quitar de la votación y devolver votos"
+                                className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-border bg-canvas px-3 text-xs font-semibold text-ink-muted hover:border-terracotta-200 hover:bg-terracotta-50 hover:text-terracotta-700 disabled:opacity-60 transition"
+                              >
+                                <Trash2
+                                  className="h-3.5 w-3.5"
+                                  aria-hidden="true"
+                                />
+                                Quitar
+                              </button>
+                            )}
+
                             {canAcceptOrRevert && (
                               <button
                                 type="button"
@@ -1533,6 +1680,112 @@ export function SessionRoomPage() {
           </div>
         </div>
       )}
+
+      {/* Confirm Remove Proposal Modal */}
+      <dialog
+        ref={removeDialogRef}
+        aria-labelledby="remove-proposal-title"
+        aria-describedby="remove-proposal-description"
+        onCancel={(e) => {
+          e.preventDefault();
+          closeRemoveProposalModal();
+        }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            closeRemoveProposalModal();
+          }
+        }}
+        className="m-auto w-[calc(100%-2rem)] max-w-md rounded-3xl border border-border bg-surface p-0 text-ink shadow-[var(--shadow-floating)]"
+      >
+        {proposalToRemove && (
+          <div className="p-5 space-y-4">
+            <div className="flex items-start gap-3">
+              <img
+                src={proposalToRemove.game.thumbnailUrl}
+                alt=""
+                className="h-12 w-12 shrink-0 rounded-xl object-cover border border-border bg-canvas-subtle"
+              />
+              <div className="min-w-0 flex-1">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-terracotta-600">
+                  Quitar de la votación
+                </span>
+                <h3
+                  id="remove-proposal-title"
+                  className="font-[var(--font-display)] text-lg font-bold text-ink"
+                >
+                  ¿Quitar “{proposalToRemove.game.name}”?
+                </h3>
+              </div>
+              <button
+                type="button"
+                disabled={removingProposal}
+                onClick={closeRemoveProposalModal}
+                aria-label="Cerrar"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-ink-muted hover:bg-canvas-subtle disabled:opacity-50"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            {removeProposalError && (
+              <div
+                role="alert"
+                className="flex items-center gap-2 rounded-xl border border-terracotta-200 bg-terracotta-50 px-3 py-2 text-xs font-semibold text-terracotta-700"
+              >
+                <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>{removeProposalError}</span>
+              </div>
+            )}
+
+            <div id="remove-proposal-description">
+              {proposalToRemove.voteCount > 0 ? (
+                <div className="rounded-xl border border-ochre-100 bg-ochre-50/80 px-3.5 py-2.5 text-xs text-ochre-700 leading-relaxed">
+                  Este juego tiene{" "}
+                  <strong className="num-tabular">
+                    {proposalToRemove.voteCount}{" "}
+                    {proposalToRemove.voteCount === 1 ? "voto" : "votos"}
+                  </strong>
+                  . Al quitarlo de la votación, se devolverán automáticamente
+                  los votos disponibles a quienes lo votaron.
+                </div>
+              ) : (
+                <p className="text-sm text-ink-muted">
+                  El juego dejará de aparecer en la votación de esta juntada y
+                  podrá volver a proponerse desde el pool si lo desean.
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                autoFocus
+                disabled={removingProposal}
+                onClick={closeRemoveProposalModal}
+                className="min-h-10 rounded-xl border border-border bg-surface px-4 text-xs font-semibold text-ink-muted hover:bg-canvas-subtle disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={removingProposal}
+                onClick={() => void handleConfirmRemoveProposal(proposalToRemove)}
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-terracotta-600 px-4 text-xs font-bold text-white hover:bg-terracotta-700 disabled:opacity-70 transition"
+              >
+                {removingProposal ? (
+                  <Loader2
+                    className="h-3.5 w-3.5 animate-spin"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+                Sí, quitar juego
+              </button>
+            </div>
+          </div>
+        )}
+      </dialog>
 
       {/* Detail Drawer */}
       <GameDetailDrawer

@@ -140,7 +140,7 @@ interface AppStateContextValue {
   removeProposal: (
     sessionId: string,
     proposalId: string,
-  ) => Promise<GameSession>;
+  ) => Promise<{ session: GameSession; refundedVotesCount: number }>;
   updateProposalStatus: (
     sessionId: string,
     proposalId: string,
@@ -770,15 +770,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
 
   const removeProposal = useCallback(
-    async (sessionId: string, proposalId: string): Promise<GameSession> => {
+    async (
+      sessionId: string,
+      proposalId: string,
+    ): Promise<{ session: GameSession; refundedVotesCount: number }> => {
       ensureSessionAccess();
-      const { session } = await sessionsApi.removeProposal(
+      const { session, refundedVotesCount } = await sessionsApi.removeProposal(
         sessionId,
         proposalId,
       );
       const mapped = mapSessionDetail(session);
       upsertSession(mapped);
-      return mapped;
+      return { session: mapped, refundedVotesCount: refundedVotesCount ?? 0 };
     },
     [ensureSessionAccess, upsertSession],
   );

@@ -811,52 +811,120 @@ export async function updateProposalStatus(
   return getSessionDetail(userId, sessionId);
 }
 
+export interface DeleteSessionProposalResult {
+  session: Awaited<ReturnType<typeof getSessionDetail>>;
+  refundedVotesCount: number;
+}
+
 export async function deleteSessionProposal(
   userId: string,
   sessionId: string,
   proposalId: string,
   scope?: SessionAccessScope,
-) {
-  const { session, isHost, isGroupAdmin } = await assertSessionAccess(
-    userId,
-    sessionId,
-    scope,
-  );
+): Promise<DeleteSessionProposalResult> {
+  const refundedVotesCount = await prisma.$transaction(async (tx) => {
+    // Lock the session row (FOR SHARE) so concurrent status changes (e.g. locking/cancelling)
+    // cannot race with proposal deletion.
+    const sessionRows = await tx.$queryRaw<
+      { id: string; group_id: string | null; host_id: string; status: SessionStatus }[]
+    >`
+      SELECT id, group_id, host_id, status
+      FROM sessions
+      WHERE id = ${sessionId}::uuid
+      FOR SHARE
+    `;
 
-  if (session.status !== SessionStatus.voting && session.status !== SessionStatus.planning) {
-    throw badRequest(
-      'No se pueden eliminar propuestas cuando la votación está cerrada',
-      undefined,
-      'SESSION_VOTING_CLOSED',
+    const lockedSession = sessionRows[0];
+    if (!lockedSession) {
+      throw notFound('Juntada no encontrada', 'SESSION_NOT_FOUND');
+    }
+
+    const [participant, membership] = await Promise.all([
+      tx.sessionParticipant.findUnique({
+        where: { sessionId_userId: { sessionId, userId } },
+        select: { userId: true },
+      }),
+      lockedSession.group_id
+        ? tx.groupMember.findUnique({
+            where: {
+              groupId_userId: { groupId: lockedSession.group_id, userId },
+            },
+            select: { role: true },
+          })
+        : Promise.resolve(null),
+    ]);
+
+    const isHost = lockedSession.host_id === userId;
+    const isParticipant = Boolean(participant);
+    const isGroupMember = Boolean(membership);
+    const isInvitedGuest = Boolean(
+      scope?.isGuest &&
+        ((scope.guestGroupId && lockedSession.group_id === scope.guestGroupId) ||
+          (scope.guestSessionId && lockedSession.id === scope.guestSessionId)),
     );
-  }
 
-  const proposal = await prisma.sessionProposal.findFirst({
-    where: { id: proposalId, sessionId },
-    select: { id: true, proposedBy: true, status: true },
+    if (!isHost && !isParticipant && !isGroupMember && !isInvitedGuest) {
+      throw forbidden('No tenés acceso a esta juntada', 'SESSION_ACCESS_DENIED');
+    }
+
+    const isGroupAdmin = !scope?.isGuest && membership?.role === GroupRole.admin;
+
+    if (
+      lockedSession.status !== SessionStatus.voting &&
+      lockedSession.status !== SessionStatus.planning
+    ) {
+      throw badRequest(
+        'No se pueden eliminar propuestas cuando la votación está cerrada',
+        undefined,
+        'SESSION_VOTING_CLOSED',
+      );
+    }
+
+    // Lock the proposal row (FOR UPDATE) to block concurrent accepts, double deletes,
+    // and FK-checked vote inserts until the transaction commits.
+    const proposalRows = await tx.$queryRaw<
+      { id: string; proposed_by: string; status: ProposalStatus }[]
+    >`
+      SELECT id, proposed_by, status
+      FROM session_proposals
+      WHERE id = ${proposalId}::uuid AND session_id = ${sessionId}::uuid
+      FOR UPDATE
+    `;
+
+    const proposal = proposalRows[0];
+    if (!proposal) {
+      throw notFound('Propuesta no encontrada', 'PROPOSAL_NOT_FOUND');
+    }
+
+    if (proposal.status === ProposalStatus.accepted) {
+      throw badRequest(
+        'Primero devolvé el juego a votación antes de quitar la propuesta',
+        undefined,
+        'PROPOSAL_ALREADY_ACCEPTED',
+      );
+    }
+
+    if (proposal.proposed_by !== userId && !isHost && !isGroupAdmin) {
+      throw forbidden(
+        'Solo quien propuso el juego o el anfitrión pueden quitar la propuesta',
+        'PROPOSAL_DELETE_FORBIDDEN',
+      );
+    }
+
+    // Explicit delete under FOR UPDATE lock returns the exact refunded vote count atomically.
+    const deletedVotes = await tx.sessionVote.deleteMany({
+      where: { proposalId: proposal.id },
+    });
+
+    await tx.sessionProposal.delete({
+      where: { id: proposal.id },
+    });
+
+    return deletedVotes.count;
   });
 
-  if (!proposal) {
-    throw notFound('Propuesta no encontrada', 'PROPOSAL_NOT_FOUND');
-  }
-
-  if (proposal.status === ProposalStatus.accepted) {
-    throw badRequest(
-      'Primero devolvé el juego a votación antes de quitar la propuesta',
-      undefined,
-      'PROPOSAL_ALREADY_ACCEPTED',
-    );
-  }
-
-  if (proposal.proposedBy !== userId && !isHost && !isGroupAdmin) {
-    throw forbidden(
-      'Solo quien propuso el juego o el anfitrión pueden quitar la propuesta',
-      'PROPOSAL_DELETE_FORBIDDEN',
-    );
-  }
-
-  await prisma.sessionProposal.delete({ where: { id: proposal.id } });
-  return getSessionDetail(userId, sessionId, scope);
+  const detail = await getSessionDetail(userId, sessionId, scope);
+  return { session: detail, refundedVotesCount };
 }
 
 export async function castVote(
@@ -947,6 +1015,7 @@ export async function castVote(
             userId,
             rank,
             proposalId: { in: otherOpenWithSameRank.map((p) => p.id) },
+            proposal: { status: ProposalStatus.open },
           },
         }),
       );
@@ -959,10 +1028,17 @@ export async function castVote(
       }),
     );
 
-    if (ops.length === 1) {
-      await ops[0];
-    } else {
-      await prisma.$transaction(ops);
+    try {
+      if (ops.length === 1) {
+        await ops[0];
+      } else {
+        await prisma.$transaction(ops);
+      }
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
+        throw notFound('Propuesta no encontrada en esta juntada', 'PROPOSAL_NOT_FOUND');
+      }
+      throw error;
     }
 
     for (const p of otherOpenWithSameRank) {
@@ -1022,6 +1098,7 @@ export async function castVote(
           where: {
             userId,
             proposalId: { in: otherOpenWithUserVote.map((p) => p.id) },
+            proposal: { status: ProposalStatus.open },
           },
         }),
       );
@@ -1034,10 +1111,17 @@ export async function castVote(
       }),
     );
 
-    if (ops.length === 1) {
-      await ops[0];
-    } else {
-      await prisma.$transaction(ops);
+    try {
+      if (ops.length === 1) {
+        await ops[0];
+      } else {
+        await prisma.$transaction(ops);
+      }
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
+        throw notFound('Propuesta no encontrada en esta juntada', 'PROPOSAL_NOT_FOUND');
+      }
+      throw error;
     }
 
     for (const p of otherOpenWithUserVote) {
@@ -1109,6 +1193,9 @@ export async function castVote(
       });
     }
   } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
+      throw notFound('Propuesta no encontrada en esta juntada', 'PROPOSAL_NOT_FOUND');
+    }
     if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')) {
       throw error;
     }
@@ -1169,13 +1256,16 @@ export async function removeVote(
 
   const hadVote = targetProposal.votes.some((v) => v.userId === userId);
   if (hadVote) {
-    await prisma.sessionVote.deleteMany({
+    const removed = await prisma.sessionVote.deleteMany({
       where: {
         proposalId,
         userId,
+        proposal: { status: ProposalStatus.open },
       },
     });
-    targetProposal.votes = targetProposal.votes.filter((v) => v.userId !== userId);
+    if (removed.count > 0) {
+      targetProposal.votes = targetProposal.votes.filter((v) => v.userId !== userId);
+    }
   }
 
   return buildVotesSnapshot(
