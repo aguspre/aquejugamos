@@ -21,6 +21,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ApiError } from '../api/client';
 import { GuestLockedView } from '../components/auth/GuestLockedView';
 import { OwnerAvatarStack } from '../components/ui/OwnerAvatarStack';
+import { UserAvatar } from '../components/ui/UserAvatar';
 import { useAppState } from '../context/AppStateContext';
 import { useAuth } from '../context/AuthContext';
 
@@ -523,12 +524,10 @@ export function GroupsPage() {
                       className="flex flex-wrap items-center justify-between gap-3 p-3.5"
                     >
                       <div className="flex items-center gap-3 min-w-0">
-                        <span
-                          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white shadow-2xs"
-                          style={{ backgroundColor: member.user.accentColor }}
-                        >
-                          {member.user.initials}
-                        </span>
+                        <UserAvatar
+                          user={member.user}
+                          className="h-10 w-10 text-xs shadow-2xs"
+                        />
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <p className="text-sm font-bold text-ink truncate">

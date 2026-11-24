@@ -31,6 +31,7 @@ import { GameCard } from "../components/game/GameCard";
 import { GameDetailDrawer } from "../components/game/GameDetailDrawer";
 import { FilterChipBar } from "../components/ui/FilterChipBar";
 import { OwnerAvatarStack } from "../components/ui/OwnerAvatarStack";
+import { UserAvatar } from "../components/ui/UserAvatar";
 import { PlayerCountBadge } from "../components/ui/PlayerCountBadge";
 import { WeightIndicator } from "../components/ui/WeightIndicator";
 import { useAppState } from "../context/AppStateContext";
@@ -555,12 +556,10 @@ export function SessionRoomPage() {
                   className="inline-flex items-center gap-2 rounded-full border border-border bg-canvas/70 py-1 pl-1 pr-2.5"
                   title={`${user.displayName}: ${rsvpText}`}
                 >
-                  <span
-                    className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold text-white ring-2 ${RSVP_RING[rsvp]}`}
-                    style={{ backgroundColor: user.accentColor }}
-                  >
-                    {user.initials}
-                  </span>
+                  <UserAvatar
+                    user={user}
+                    className={`h-6 w-6 text-[10px] ring-2 ${RSVP_RING[rsvp]}`}
+                  />
                   <span className="text-xs font-semibold text-ink">
                     {user.displayName}
                   </span>

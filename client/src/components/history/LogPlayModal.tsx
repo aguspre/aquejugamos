@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { ApiError } from '../../api/client';
+import { UserAvatar } from '../ui/UserAvatar';
 import { useAppState } from '../../context/AppStateContext';
 import type { PlayLogPlayer } from '../../types/domain';
 
@@ -390,12 +391,10 @@ export function LogPlayModal() {
                         }`}
                       >
                         <div className="flex items-center gap-2.5 min-w-0">
-                          <span
-                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
-                            style={{ backgroundColor: user.accentColor }}
-                          >
-                            {user.initials}
-                          </span>
+                          <UserAvatar
+                            user={user}
+                            className="h-8 w-8 text-xs"
+                          />
                           <span className="text-sm font-bold text-ink truncate">
                             {user.displayName}
                           </span>
