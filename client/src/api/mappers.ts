@@ -438,6 +438,24 @@ export function applyVotesSnapshot(
   };
 }
 
+export function applyOptimisticRsvp(
+  session: GameSession,
+  user: UserSummary,
+  rsvp: RsvpStatus,
+): GameSession {
+  const exists = session.participants.some((p) => p.user.id === user.id);
+  const nextParticipants = exists
+    ? session.participants.map((p) =>
+        p.user.id === user.id ? { ...p, rsvp } : p,
+      )
+    : [...session.participants, { user, rsvp }];
+
+  return {
+    ...session,
+    participants: nextParticipants,
+  };
+}
+
 export function applyOptimisticVote(
   session: GameSession,
   proposalId: string,

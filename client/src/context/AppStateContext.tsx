@@ -19,6 +19,7 @@ import {
   type BggSyncResponse,
 } from "../api/endpoints";
 import {
+  applyOptimisticRsvp,
   applyOptimisticVote,
   applyVotesSnapshot,
   getInitials,
@@ -128,6 +129,8 @@ interface AppStateContextValue {
     sessionId: string,
     userId: string,
     rsvp: RsvpStatus,
+    currentSession?: GameSession,
+    onOptimistic?: (optimisticSession: GameSession) => void,
   ) => Promise<GameSession>;
   proposeGame: (
     sessionId: string,
@@ -606,14 +609,31 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       >,
     ): Promise<void> => {
       ensureRegistered();
-      await libraryApi.updateItem(gameId, {
-        status: patch.status,
-        personalRating: patch.personalRating ?? null,
-        notes: patch.notes ?? null,
-      });
+      let previousItem: LibraryGameItem | undefined;
       setLibrary((prev) =>
-        prev.map((item) => (item.id === gameId ? { ...item, ...patch } : item)),
+        prev.map((item) => {
+          if (item.id === gameId) {
+            previousItem = item;
+            return { ...item, ...patch };
+          }
+          return item;
+        }),
       );
+      try {
+        await libraryApi.updateItem(gameId, {
+          status: patch.status,
+          personalRating: patch.personalRating ?? null,
+          notes: patch.notes ?? null,
+        });
+      } catch (err) {
+        if (previousItem) {
+          const rollback = previousItem;
+          setLibrary((prev) =>
+            prev.map((item) => (item.id === gameId ? rollback : item)),
+          );
+        }
+        throw err;
+      }
     },
     [ensureRegistered],
   );
@@ -706,14 +726,32 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       sessionId: string,
       _userId: string,
       rsvp: RsvpStatus,
+      currentSession?: GameSession,
+      onOptimistic?: (optimisticSession: GameSession) => void,
     ): Promise<GameSession> => {
       ensureSessionAccess();
-      const { session } = await sessionsApi.updateRsvp(sessionId, rsvp);
-      const mapped = mapSessionDetail(session);
-      upsertSession(mapped);
-      return mapped;
+      const targetSession =
+        currentSession ?? sessions.find((s) => s.id === sessionId);
+
+      if (targetSession) {
+        const optimistic = applyOptimisticRsvp(targetSession, currentUser, rsvp);
+        upsertSession(optimistic);
+        onOptimistic?.(optimistic);
+      }
+
+      try {
+        const { session } = await sessionsApi.updateRsvp(sessionId, rsvp);
+        const mapped = mapSessionDetail(session);
+        upsertSession(mapped);
+        return mapped;
+      } catch (err) {
+        if (targetSession) {
+          upsertSession(targetSession);
+        }
+        throw err;
+      }
     },
-    [ensureSessionAccess, upsertSession],
+    [ensureSessionAccess, sessions, currentUser, upsertSession],
   );
 
   const proposeGame = useCallback(

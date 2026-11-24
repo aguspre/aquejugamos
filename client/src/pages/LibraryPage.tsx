@@ -731,12 +731,26 @@ export function LibraryPage() {
         game={selectedEntry}
         status={selectedEntry?.status}
         notes={selectedEntry?.notes}
-        onUpdateStatus={(gameId, status) =>
-          void updateLibraryItem(gameId, { status })
-        }
-        onUpdateNotes={(gameId, notes) =>
-          void updateLibraryItem(gameId, { notes })
-        }
+        onUpdateStatus={(gameId, status) => {
+          setSyncError(null);
+          void updateLibraryItem(gameId, { status }).catch((err) => {
+            setSyncError(
+              err instanceof ApiError
+                ? err.message
+                : "No se pudo actualizar el estado del juego. Se restauró el estado anterior.",
+            );
+          });
+        }}
+        onUpdateNotes={(gameId, notes) => {
+          setSyncError(null);
+          void updateLibraryItem(gameId, { notes }).catch((err) => {
+            setSyncError(
+              err instanceof ApiError
+                ? err.message
+                : "No se pudieron guardar las notas. Se restauró el estado anterior.",
+            );
+          });
+        }}
         onRemove={
           selectedEntry
             ? () => handleRemoveFromLibrary(selectedEntry)
