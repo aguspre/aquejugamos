@@ -1,0 +1,39 @@
+{
+  "safety-guard": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command|edit_file|write_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./hooks/pre-tool-guard.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "prisma-format": {
+    "PostToolUse": [
+      {
+        "matcher": "edit_file|write_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./hooks/post-prisma-format.mjs",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  },
+  "quality-gate": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node ./hooks/stop-quality-gate.mjs",
+        "timeout": 90
+      }
+    ]
+  }
+}
