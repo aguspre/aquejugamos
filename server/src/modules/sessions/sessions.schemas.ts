@@ -1,4 +1,10 @@
-import { ProposalStatus, RsvpStatus, SessionStatus, VotingMode } from '@prisma/client';
+import {
+  ProposalStatus,
+  RecurrenceFrequency,
+  RsvpStatus,
+  SessionStatus,
+  VotingMode,
+} from '@prisma/client';
 import { z } from 'zod';
 
 const booleanQueryParam = z
@@ -27,36 +33,64 @@ const validSessionDate = z
       ),
   );
 
-export const createSessionSchema = z.object({
-  groupId: z.string().uuid().nullable().optional(),
-  title: z
-    .string()
-    .trim()
-    .min(2, 'El título debe tener al menos 2 caracteres')
-    .max(120, 'El título es demasiado largo'),
-  scheduledAt: validSessionDate,
-  location: z.string().trim().max(200).nullable().optional(),
-  status: z.nativeEnum(SessionStatus).optional().default(SessionStatus.voting),
-  votingMode: z.nativeEnum(VotingMode).optional().default(VotingMode.multi_vote),
-  maxVotesPerUser: z.coerce.number().int().min(1).max(10).optional().default(3),
-  maxProposalsPerUser: z
-    .number()
-    .int('El límite de propuestas debe ser un número entero')
-    .min(1, 'El mínimo es 1 propuesta por integrante')
-    .max(20, 'El máximo es 20 propuestas por integrante')
-    .nullable()
-    .optional()
-    .default(null),
-});
+export const createSessionSchema = z
+  .object({
+    groupId: z.string().uuid().nullable().optional(),
+    title: z
+      .string()
+      .trim()
+      .min(2, 'El título debe tener al menos 2 caracteres')
+      .max(120, 'El título es demasiado largo'),
+    scheduledAt: validSessionDate,
+    location: z.string().trim().max(200).nullable().optional(),
+    status: z.nativeEnum(SessionStatus).optional().default(SessionStatus.voting),
+    votingMode: z.nativeEnum(VotingMode).optional().default(VotingMode.multi_vote),
+    maxVotesPerUser: z.coerce.number().int().min(1).max(10).optional().default(3),
+    maxProposalsPerUser: z
+      .number()
+      .int('El límite de propuestas debe ser un número entero')
+      .min(1, 'El mínimo es 1 propuesta por integrante')
+      .max(20, 'El máximo es 20 propuestas por integrante')
+      .nullable()
+      .optional()
+      .default(null),
+    recurrenceFrequency: z
+      .nativeEnum(RecurrenceFrequency)
+      .nullable()
+      .optional()
+      .default(null),
+  })
+  .refine((data) => !data.recurrenceFrequency || Boolean(data.groupId), {
+    message: 'Las juntadas recurrentes deben pertenecer a un grupo',
+    path: ['recurrenceFrequency'],
+  });
 
 export const sessionIdParamsSchema = z.object({
   sessionId: z.string().uuid('sessionId inválido'),
+});
+
+export const seriesIdParamsSchema = z.object({
+  seriesId: z.string().uuid('seriesId inválido'),
 });
 
 export const joinSessionSchema = z.object({
   inviteToken: z.string().trim().min(4, 'Token de invitación inválido').max(64),
   rsvp: z.nativeEnum(RsvpStatus).optional().default(RsvpStatus.going),
 });
+
+export const joinSeriesSchema = z.object({
+  shareToken: z.string().trim().min(4, 'Link de juntada recurrente inválido').max(64),
+  rsvp: z.nativeEnum(RsvpStatus).optional().default(RsvpStatus.going),
+});
+
+export const updateSeriesSchema = z
+  .object({
+    frequency: z.nativeEnum(RecurrenceFrequency).optional(),
+    isActive: z.boolean().optional(),
+  })
+  .refine((data) => data.frequency !== undefined || data.isActive !== undefined, {
+    message: 'Debés enviar al menos un campo para actualizar la serie',
+  });
 
 export const updateRsvpSchema = z.object({
   rsvp: z.nativeEnum(RsvpStatus),
@@ -140,5 +174,6 @@ export const updateProposalStatusSchema = z.object({
 export type ListSessionsQuery = z.infer<typeof listSessionsQuerySchema>;
 export type CreateSessionInput = z.infer<typeof createSessionSchema>;
 export type UpdateSessionInput = z.infer<typeof updateSessionSchema>;
+export type UpdateSeriesInput = z.infer<typeof updateSeriesSchema>;
 export type SessionPoolQuery = z.infer<typeof sessionPoolQuerySchema>;
 export type CreateProposalInput = z.infer<typeof createProposalSchema>;

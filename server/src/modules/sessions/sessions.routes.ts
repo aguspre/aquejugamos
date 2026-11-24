@@ -4,23 +4,28 @@ import {
   castVoteSchema,
   createProposalSchema,
   createSessionSchema,
+  joinSeriesSchema,
   joinSessionSchema,
   listSessionsQuerySchema,
   proposalParamsSchema,
+  seriesIdParamsSchema,
   sessionIdParamsSchema,
   sessionPoolQuerySchema,
   updateProposalStatusSchema,
   updateRsvpSchema,
+  updateSeriesSchema,
   updateSessionSchema,
   updateSessionStatusSchema,
 } from './sessions.schemas.js';
 import {
+  advanceSeriesToNextOccurrence,
   castVote,
   createSession,
   deleteSession,
   deleteSessionProposal,
   getSessionCombinedPool,
   getSessionDetail,
+  joinSeriesByShareToken,
   joinSessionByInviteToken,
   listUserSessions,
   proposeGameForSession,
@@ -28,6 +33,7 @@ import {
   updateParticipantRsvp,
   updateProposalStatus,
   updateSession,
+  updateSessionSeries,
   updateSessionStatus,
   type SessionAccessScope,
 } from './sessions.service.js';
@@ -65,6 +71,37 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     const session = await joinSessionByInviteToken(request.user.sub, inviteToken, rsvp);
     return { session };
   });
+
+  app.post(
+    '/series/join',
+    { preHandler: [requireRegisteredUser] },
+    async (request) => {
+      const { shareToken, rsvp } = joinSeriesSchema.parse(request.body);
+      const session = await joinSeriesByShareToken(request.user.sub, shareToken, rsvp);
+      return { session };
+    },
+  );
+
+  app.post(
+    '/series/:seriesId/advance',
+    { preHandler: [requireRegisteredUser] },
+    async (request, reply) => {
+      const { seriesId } = seriesIdParamsSchema.parse(request.params);
+      const session = await advanceSeriesToNextOccurrence(request.user.sub, seriesId);
+      return reply.status(201).send({ session });
+    },
+  );
+
+  app.patch(
+    '/series/:seriesId',
+    { preHandler: [requireRegisteredUser] },
+    async (request) => {
+      const { seriesId } = seriesIdParamsSchema.parse(request.params);
+      const input = updateSeriesSchema.parse(request.body);
+      const result = await updateSessionSeries(request.user.sub, seriesId, input);
+      return result;
+    },
+  );
 
   app.get('/:sessionId', async (request) => {
     const { sessionId } = sessionIdParamsSchema.parse(request.params);

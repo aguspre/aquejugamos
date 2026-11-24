@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { GroupRole, Prisma, UserGameStatus } from '@prisma/client';
 import { prisma } from '../../config/prisma.js';
 import { badRequest, forbidden, notFound } from '../../utils/errors.js';
@@ -346,6 +347,20 @@ export async function removeGroupMember(
   await prisma.groupMember.delete({
     where: { groupId_userId: { groupId, userId: targetUserId } },
   });
+
+  if (!isSelf) {
+    // Revocar los links fijos de series recurrentes para que el miembro expulsado no pueda reingresar
+    const groupSeries = await prisma.sessionSeries.findMany({
+      where: { groupId },
+      select: { id: true },
+    });
+    for (const s of groupSeries) {
+      await prisma.sessionSeries.update({
+        where: { id: s.id },
+        data: { shareToken: randomBytes(12).toString('base64url') },
+      });
+    }
+  }
 
   return { groupDeleted: false };
 }

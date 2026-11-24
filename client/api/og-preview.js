@@ -198,6 +198,7 @@ function getQueryParams(req) {
       sessionId: firstValue(req.query.sessionId)?.trim() || '',
       invite: firstValue(req.query.invite)?.trim() || '',
       inviteCode: firstValue(req.query.inviteCode)?.trim() || '',
+      seriesToken: firstValue(req.query.seriesToken)?.trim() || '',
     };
   }
 
@@ -207,6 +208,7 @@ function getQueryParams(req) {
     sessionId: parsed.searchParams.get('sessionId')?.trim() || '',
     invite: parsed.searchParams.get('invite')?.trim() || '',
     inviteCode: parsed.searchParams.get('inviteCode')?.trim() || '',
+    seriesToken: parsed.searchParams.get('seriesToken')?.trim() || '',
   };
 }
 
@@ -222,7 +224,10 @@ function resolveOrigin(req) {
   return `${proto}://${host}`;
 }
 
-function resolveCanonicalUrl(origin, { kind, sessionId, invite, inviteCode }) {
+function resolveCanonicalUrl(origin, { kind, sessionId, invite, inviteCode, seriesToken }) {
+  if (kind === 'series' && seriesToken) {
+    return `${origin}/s/${encodeURIComponent(seriesToken)}`;
+  }
   if (kind === 'session' && sessionId && invite) {
     return `${origin}/sessions/${encodeURIComponent(sessionId)}?invite=${encodeURIComponent(invite)}`;
   }
@@ -235,11 +240,13 @@ function resolveCanonicalUrl(origin, { kind, sessionId, invite, inviteCode }) {
   return `${origin}/`;
 }
 
-async function fetchInvitePreview(apiBase, { kind, invite, inviteCode }) {
+async function fetchInvitePreview(apiBase, { kind, invite, inviteCode, seriesToken }) {
   if (!apiBase) return null;
 
   const endpoint = new URL(`${apiBase}/api/auth/invite-preview`);
-  if (kind === 'session' && invite) {
+  if (kind === 'series' && seriesToken) {
+    endpoint.searchParams.set('seriesToken', seriesToken);
+  } else if (kind === 'session' && invite) {
     endpoint.searchParams.set('sessionToken', invite);
   } else if (kind === 'group' && inviteCode) {
     endpoint.searchParams.set('groupCode', inviteCode);

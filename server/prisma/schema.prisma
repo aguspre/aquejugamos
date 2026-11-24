@@ -48,6 +48,12 @@ enum ProposalStatus {
   accepted
 }
 
+enum RecurrenceFrequency {
+  weekly
+  biweekly
+  monthly
+}
+
 // ============================================================================
 // 1. Usuarios
 // ============================================================================
@@ -69,6 +75,7 @@ model User {
   createdGroups         Group[]              @relation("GroupCreator")
   groupMemberships      GroupMember[]
   hostedSessions        Session[]            @relation("SessionHost")
+  hostedSeries          SessionSeries[]      @relation("SeriesHost")
   sessionParticipations SessionParticipant[]
   proposals             SessionProposal[]    @relation("ProposalAuthor")
   acceptedProposals     SessionProposal[]    @relation("ProposalAccepter")
@@ -172,10 +179,11 @@ model Group {
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
-  creator  User          @relation("GroupCreator", fields: [createdBy], references: [id], onDelete: Restrict)
-  members  GroupMember[]
-  sessions Session[]
-  playLogs PlayLog[]
+  creator       User            @relation("GroupCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  members       GroupMember[]
+  sessions      Session[]
+  sessionSeries SessionSeries[]
+  playLogs      PlayLog[]
 
   @@index([createdBy])
   @@map("groups")
@@ -199,9 +207,34 @@ model GroupMember {
 // 5. Juntadas
 // ============================================================================
 
+model SessionSeries {
+  id                  String              @id @default(uuid()) @db.Uuid
+  groupId             String              @map("group_id") @db.Uuid
+  hostId              String              @map("host_id") @db.Uuid
+  title               String
+  location            String?
+  frequency           RecurrenceFrequency @default(weekly)
+  votingMode          VotingMode          @default(multi_vote) @map("voting_mode")
+  maxVotesPerUser     Int                 @default(3) @map("max_votes_per_user")
+  maxProposalsPerUser Int?                @map("max_proposals_per_user")
+  shareToken          String              @unique @map("share_token")
+  isActive            Boolean             @default(true) @map("is_active")
+  createdAt           DateTime            @default(now()) @map("created_at")
+  updatedAt           DateTime            @updatedAt @map("updated_at")
+
+  group    Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  host     User      @relation("SeriesHost", fields: [hostId], references: [id], onDelete: Restrict)
+  sessions Session[]
+
+  @@index([groupId, isActive])
+  @@index([hostId])
+  @@map("session_series")
+}
+
 model Session {
   id                  String        @id @default(uuid()) @db.Uuid
   groupId             String?       @map("group_id") @db.Uuid
+  seriesId            String?       @map("series_id") @db.Uuid
   hostId              String        @map("host_id") @db.Uuid
   title               String
   scheduledAt         DateTime      @map("scheduled_at")
@@ -215,12 +248,14 @@ model Session {
   updatedAt           DateTime      @updatedAt @map("updated_at")
 
   group        Group?               @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  series       SessionSeries?       @relation(fields: [seriesId], references: [id], onDelete: SetNull)
   host         User                 @relation("SessionHost", fields: [hostId], references: [id], onDelete: Restrict)
   participants SessionParticipant[]
   proposals    SessionProposal[]
   playLogs     PlayLog[]
 
   @@index([groupId, scheduledAt])
+  @@index([seriesId, scheduledAt])
   @@index([hostId])
   @@index([status])
   @@map("sessions")

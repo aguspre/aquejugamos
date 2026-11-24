@@ -15,6 +15,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type Context,
   type ReactNode,
@@ -23,6 +24,7 @@ import {
   ApiError,
   getStoredGuestToken,
   setStoredGuestToken,
+  warmUpBackend,
 } from "../api/client";
 import {
   authApi,
@@ -46,6 +48,7 @@ interface GuestJoinInput {
   displayName: string;
   groupInviteCode?: string;
   sessionInviteToken?: string;
+  seriesShareToken?: string;
 }
 
 interface AuthContextValue {
@@ -53,6 +56,7 @@ interface AuthContextValue {
   backendUser: BackendUserProfile | null;
   backendSyncStatus: BackendSyncStatus;
   backendSyncError: string | null;
+  backendSyncSlow: boolean;
   loading: boolean;
   /** True solo cuando el usuario inició sesión con cuenta registrada (Firebase). */
   isAuthenticated: boolean;
@@ -131,6 +135,40 @@ export function formatFirebaseAuthError(error: unknown): string {
   return "Ocurrió un error inesperado al autenticar.";
 }
 
+const SYNC_RETRY_DELAYS_MS = [1500, 3000] as const;
+const SLOW_SYNC_THRESHOLD_MS = 3500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function isTransientSyncError(error: unknown): boolean {
+  if (error instanceof ApiError) {
+    return (
+      error.code === "NETWORK_ERROR" ||
+      error.code === "REQUEST_TIMEOUT" ||
+      error.status === 408 ||
+      error.status === 502 ||
+      error.status === 503 ||
+      error.status === 504
+    );
+  }
+  return true;
+}
+
+function shouldWarmUpOnMount(): boolean {
+  if (typeof window === "undefined") return false;
+  const path = window.location.pathname;
+  if (path !== "/" && path !== "/welcome") return true;
+  if (window.location.search.includes("Invite=")) return true;
+  if (getStoredGuestToken()) return true;
+  try {
+    return Boolean(localStorage.getItem("aquejugamos_active_group"));
+  } catch {
+    return false;
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [registeredUser, setRegisteredUser] =
@@ -140,9 +178,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [backendSyncStatus, setBackendSyncStatus] =
     useState<BackendSyncStatus>("idle");
   const [backendSyncError, setBackendSyncError] = useState<string | null>(null);
+  const [backendSyncSlow, setBackendSyncSlow] = useState(false);
   const [loading, setLoading] = useState(true);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<AuthModalTab>("signin");
+
+  const syncRunIdRef = useRef(0);
+  const syncInFlightRef = useRef<{
+    uid: string;
+    promise: Promise<void>;
+  } | null>(null);
+  const manualAuthInProgressRef = useRef(false);
+
+  useEffect(() => {
+    if (shouldWarmUpOnMount()) {
+      warmUpBackend();
+    }
+  }, []);
 
   const clearGuestState = useCallback(() => {
     setStoredGuestToken(null);
@@ -156,23 +208,99 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       overrides?: { displayName?: string; bggUsername?: string | null },
       forceRefreshToken = false,
     ) => {
-      setBackendSyncStatus("syncing");
-      setBackendSyncError(null);
-      try {
-        const token = await user.getIdToken(forceRefreshToken);
-        const { user: synced } = await authApi.sync(overrides, token);
-        setRegisteredUser(synced);
-        setBackendSyncStatus("synced");
-      } catch (error) {
-        setBackendSyncStatus("offline");
-        if (error instanceof ApiError) {
-          setBackendSyncError(error.message);
-        } else {
-          setBackendSyncError(
-            "El backend no respondió para sincronizar tu perfil en PostgreSQL.",
-          );
-        }
+      if (
+        !overrides &&
+        !forceRefreshToken &&
+        syncInFlightRef.current?.uid === user.uid
+      ) {
+        return syncInFlightRef.current.promise;
       }
+
+      const runId = ++syncRunIdRef.current;
+
+      let task!: Promise<void>;
+      task = (async () => {
+        setBackendSyncStatus("syncing");
+        setBackendSyncError(null);
+        setBackendSyncSlow(false);
+
+        const slowTimer = window.setTimeout(() => {
+          if (syncRunIdRef.current === runId) {
+            setBackendSyncSlow(true);
+          }
+        }, SLOW_SYNC_THRESHOLD_MS);
+
+        let shouldForceRefresh = forceRefreshToken;
+        let lastError: unknown = null;
+
+        try {
+          for (
+            let attempt = 0;
+            attempt <= SYNC_RETRY_DELAYS_MS.length;
+            attempt += 1
+          ) {
+            if (syncRunIdRef.current !== runId) return;
+
+            try {
+              const token = await user.getIdToken(shouldForceRefresh);
+              if (syncRunIdRef.current !== runId) return;
+
+              const { user: synced } = await authApi.sync(overrides, token);
+              if (syncRunIdRef.current !== runId) return;
+
+              setRegisteredUser(synced);
+              setBackendSyncStatus("synced");
+              setBackendSyncError(null);
+              return;
+            } catch (error) {
+              lastError = error;
+
+              // Si falló con 401 usando token cacheado, reintentamos una vez refrescando el token
+              if (
+                !shouldForceRefresh &&
+                error instanceof ApiError &&
+                error.status === 401
+              ) {
+                shouldForceRefresh = true;
+                continue;
+              }
+
+              const retryDelay = SYNC_RETRY_DELAYS_MS[attempt];
+              if (retryDelay !== undefined && isTransientSyncError(error)) {
+                await sleep(retryDelay);
+                continue;
+              }
+
+              break;
+            }
+          }
+
+          if (syncRunIdRef.current !== runId) return;
+
+          setBackendSyncStatus("offline");
+          if (lastError instanceof ApiError) {
+            setBackendSyncError(lastError.message);
+          } else {
+            setBackendSyncError(
+              "No pudimos conectar con el servidor en este momento. Intentá de nuevo en unos segundos.",
+            );
+          }
+        } finally {
+          window.clearTimeout(slowTimer);
+          if (syncRunIdRef.current === runId) {
+            setBackendSyncSlow(false);
+          }
+          if (syncInFlightRef.current?.promise === task) {
+            syncInFlightRef.current = null;
+          }
+        }
+      })();
+
+      if (!overrides && !forceRefreshToken) {
+        syncInFlightRef.current = { uid: user.uid, promise: task };
+      }
+
+      return task;
     },
     [],
   );
@@ -188,13 +316,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (user) {
         clearGuestState();
         setLoading(false);
+        if (manualAuthInProgressRef.current) {
+          setBackendSyncStatus("syncing");
+          return;
+        }
         void syncWithBackend(user);
         return;
       }
 
+      syncRunIdRef.current += 1;
+      syncInFlightRef.current = null;
       setRegisteredUser(null);
       setBackendSyncStatus("idle");
       setBackendSyncError(null);
+      setBackendSyncSlow(false);
 
       const storedGuestToken = getStoredGuestToken();
       if (!storedGuestToken) {
@@ -230,6 +365,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [syncWithBackend, clearGuestState]);
 
+  // Reintentar automáticamente cuando el navegador recupera conectividad
+  useEffect(() => {
+    const handleOnline = () => {
+      if (backendSyncStatus === "offline" && firebaseAuth.currentUser) {
+        void syncWithBackend(firebaseAuth.currentUser);
+      }
+    };
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
+  }, [backendSyncStatus, syncWithBackend]);
+
   const openAuthModal = useCallback((tab: AuthModalTab = "signin") => {
     setAuthModalTab(tab);
     setAuthModalOpen(true);
@@ -240,22 +386,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signInWithGoogle = useCallback(async () => {
-    const result = await signInWithPopup(firebaseAuth, googleProvider);
-    clearGuestState();
-    await syncWithBackend(result.user);
-    setAuthModalOpen(false);
+    manualAuthInProgressRef.current = true;
+    try {
+      const result = await signInWithPopup(firebaseAuth, googleProvider);
+      clearGuestState();
+      await syncWithBackend(result.user);
+      setAuthModalOpen(false);
+    } finally {
+      manualAuthInProgressRef.current = false;
+    }
   }, [syncWithBackend, clearGuestState]);
 
   const signInWithEmail = useCallback(
     async (email: string, password: string) => {
-      const result = await signInWithEmailAndPassword(
-        firebaseAuth,
-        email.trim(),
-        password,
-      );
-      clearGuestState();
-      await syncWithBackend(result.user);
-      setAuthModalOpen(false);
+      manualAuthInProgressRef.current = true;
+      try {
+        const result = await signInWithEmailAndPassword(
+          firebaseAuth,
+          email.trim(),
+          password,
+        );
+        clearGuestState();
+        await syncWithBackend(result.user);
+        setAuthModalOpen(false);
+      } finally {
+        manualAuthInProgressRef.current = false;
+      }
     },
     [syncWithBackend, clearGuestState],
   );
@@ -263,25 +419,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signUpWithEmail = useCallback(
     async ({ email, password, displayName }: SignUpInput) => {
       const trimmedName = displayName.trim();
-      const result = await createUserWithEmailAndPassword(
-        firebaseAuth,
-        email.trim(),
-        password,
-      );
+      manualAuthInProgressRef.current = true;
+      try {
+        const result = await createUserWithEmailAndPassword(
+          firebaseAuth,
+          email.trim(),
+          password,
+        );
 
-      if (trimmedName) {
-        await firebaseUpdateProfile(result.user, { displayName: trimmedName });
+        if (trimmedName) {
+          await firebaseUpdateProfile(result.user, {
+            displayName: trimmedName,
+          });
+        }
+
+        clearGuestState();
+
+        // Refrescamos el token para que contenga el displayName recién guardado
+        await syncWithBackend(
+          result.user,
+          trimmedName ? { displayName: trimmedName } : undefined,
+          true,
+        );
+        setAuthModalOpen(false);
+      } catch (error) {
+        // Si la cuenta se creó pero falló un paso posterior, igual sincronizamos
+        // para no dejar el estado en "syncing" indefinidamente.
+        manualAuthInProgressRef.current = false;
+        if (firebaseAuth.currentUser) {
+          void syncWithBackend(firebaseAuth.currentUser);
+        }
+        throw error;
+      } finally {
+        manualAuthInProgressRef.current = false;
       }
-
-      clearGuestState();
-
-      // Refrescamos el token para que contenga el displayName recién guardado
-      await syncWithBackend(
-        result.user,
-        trimmedName ? { displayName: trimmedName } : undefined,
-        true,
-      );
-      setAuthModalOpen(false);
     },
     [syncWithBackend, clearGuestState],
   );
@@ -291,6 +462,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       displayName: input.displayName.trim(),
       groupInviteCode: input.groupInviteCode,
       sessionInviteToken: input.sessionInviteToken,
+      seriesShareToken: input.seriesShareToken,
     });
 
     setStoredGuestToken(res.token);
@@ -313,6 +485,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    syncRunIdRef.current += 1;
+    syncInFlightRef.current = null;
     if (firebaseAuth.currentUser) {
       await firebaseSignOut(firebaseAuth);
     }
@@ -320,11 +494,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setRegisteredUser(null);
     setBackendSyncStatus("idle");
     setBackendSyncError(null);
+    setBackendSyncSlow(false);
   }, [clearGuestState]);
 
   const refreshBackendSync = useCallback(async () => {
     if (!firebaseAuth.currentUser) return;
-    await syncWithBackend(firebaseAuth.currentUser, undefined, true);
+    await syncWithBackend(firebaseAuth.currentUser);
   }, [syncWithBackend]);
 
   const updateAccountProfile = useCallback(
@@ -364,6 +539,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       backendUser,
       backendSyncStatus,
       backendSyncError,
+      backendSyncSlow,
       loading,
       isAuthenticated,
       isGuestSession,
@@ -388,6 +564,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       backendUser,
       backendSyncStatus,
       backendSyncError,
+      backendSyncSlow,
       loading,
       isAuthenticated,
       isGuestSession,

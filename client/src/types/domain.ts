@@ -10,6 +10,24 @@ export type RsvpStatus = 'going' | 'maybe' | 'not_going';
 
 export type ProposalStatus = 'open' | 'accepted';
 
+export type RecurrenceFrequency = 'weekly' | 'biweekly' | 'monthly';
+
+export interface SessionSeriesSummary {
+  id: string;
+  frequency: RecurrenceFrequency;
+  shareToken: string | null;
+  isActive: boolean;
+}
+
+export interface SessionSeriesHistoryItem {
+  id: string;
+  title: string;
+  scheduledAt: string;
+  status: SessionStatus;
+  confirmedCount: number;
+  acceptedGames: string[];
+}
+
 export interface UserSummary {
   id: string;
   displayName: string;
@@ -101,6 +119,8 @@ export interface GameSession {
   lockedVotesCount?: number;
   lockedRanks?: number[];
   inviteToken: string;
+  series?: SessionSeriesSummary | null;
+  seriesHistory?: SessionSeriesHistoryItem[];
   participants: SessionParticipant[];
   proposals: SessionProposal[];
 }

@@ -40,8 +40,10 @@ import type {
   PlayLog,
   PlayLogPlayer,
   ProposalStatus,
+  RecurrenceFrequency,
   RsvpStatus,
   SessionGameItem,
+  SessionSeriesSummary,
   UserGameStatus,
   UserSummary,
   VotingMode,
@@ -63,6 +65,7 @@ export interface CreateSessionInput {
   votingMode: VotingMode;
   maxVotesPerUser: number;
   maxProposalsPerUser?: number | null;
+  recurrenceFrequency?: RecurrenceFrequency | null;
 }
 
 export interface UpdateSessionInput {
@@ -138,6 +141,18 @@ interface AppStateContextValue {
     inviteToken: string,
     rsvp?: RsvpStatus,
   ) => Promise<GameSession>;
+  joinSeriesByShareToken: (
+    shareToken: string,
+    rsvp?: RsvpStatus,
+  ) => Promise<GameSession>;
+  advanceSeries: (seriesId: string) => Promise<GameSession>;
+  updateSeries: (
+    seriesId: string,
+    payload: { frequency?: RecurrenceFrequency; isActive?: boolean },
+  ) => Promise<{
+    series: SessionSeriesSummary;
+    activeSessionId: string | null;
+  }>;
   loadSessionDetail: (sessionId: string) => Promise<GameSession>;
   loadSessionPool: (sessionId: string) => Promise<SessionGameItem[]>;
   updateRsvp: (
@@ -294,13 +309,17 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       );
     }
     if (!backendUser) {
+      const isConnecting =
+        backendSyncStatus === "idle" || backendSyncStatus === "syncing";
       throw new ApiError(
         503,
         "BACKEND_NOT_SYNCED",
-        "El servidor todavía no sincronizó tu cuenta. Revisá la conexión con el backend.",
+        isConnecting
+          ? "Todavía estamos cargando tu cuenta. Esperá un momento y volvé a intentar."
+          : "No pudimos conectarnos con el servidor. Revisá tu conexión e intentá de nuevo.",
       );
     }
-  }, [isAuthenticated, backendUser, openAuthModal]);
+  }, [isAuthenticated, backendUser, backendSyncStatus, openAuthModal]);
 
   const ensureSessionAccess = useCallback(() => {
     if (isRegisteredReady || isInvitedGuestReady) {
@@ -310,16 +329,21 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       openAuthModal("signin");
       throw new ApiError(401, "AUTH_REQUIRED", "Iniciá sesión para continuar.");
     }
+    const isConnecting =
+      backendSyncStatus === "idle" || backendSyncStatus === "syncing";
     throw new ApiError(
       503,
       "BACKEND_NOT_SYNCED",
-      "El servidor todavía no sincronizó tu perfil. Revisá la conexión con el backend.",
+      isConnecting
+        ? "Todavía estamos conectando tu perfil. Esperá un momento y volvé a intentar."
+        : "No pudimos conectarnos con el servidor. Revisá tu conexión e intentá de nuevo.",
     );
   }, [
     isRegisteredReady,
     isInvitedGuestReady,
     isAuthenticated,
     isGuestSession,
+    backendSyncStatus,
     openAuthModal,
   ]);
 
@@ -395,6 +419,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         }
         return mappedGroups[0]?.id ?? null;
       });
+    } catch {
+      // Mantenemos el estado actual si falla una carga inicial o recarga en segundo plano
     } finally {
       setIsBootstrapping(false);
     }
@@ -402,7 +428,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (authLoading) return;
-    if (isAuthenticated && backendSyncStatus === "syncing") {
+    if (
+      isAuthenticated &&
+      (backendSyncStatus === "idle" || backendSyncStatus === "syncing")
+    ) {
       setIsBootstrapping(true);
       return;
     }
@@ -692,6 +721,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         votingMode: input.votingMode,
         maxVotesPerUser: input.maxVotesPerUser,
         maxProposalsPerUser: input.maxProposalsPerUser ?? null,
+        recurrenceFrequency: input.recurrenceFrequency ?? null,
       });
       const mapped = mapSessionDetail(session);
       upsertSession(mapped);
@@ -762,6 +792,76 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [ensureSessionAccess, upsertSession],
   );
 
+  const joinSeriesByShareToken = useCallback(
+    async (
+      shareToken: string,
+      rsvp: RsvpStatus = "going",
+    ): Promise<GameSession> => {
+      ensureRegistered();
+      const { session } = await sessionsApi.joinSeries(shareToken, rsvp);
+      const mapped = mapSessionDetail(session);
+      upsertSession(mapped);
+      return mapped;
+    },
+    [ensureRegistered, upsertSession],
+  );
+
+  const advanceSeries = useCallback(
+    async (seriesId: string): Promise<GameSession> => {
+      ensureRegistered();
+      const { session } = await sessionsApi.advanceSeries(seriesId);
+      const mapped = mapSessionDetail(session);
+      setSessions((prev) => {
+        const archived = prev.map((s) =>
+          s.series?.id === seriesId &&
+          s.id !== mapped.id &&
+          (s.status === "planning" ||
+            s.status === "voting" ||
+            s.status === "locked")
+            ? { ...s, status: "completed" as const }
+            : s,
+        );
+        const exists = archived.some((s) => s.id === mapped.id);
+        return exists
+          ? archived.map((s) => (s.id === mapped.id ? mapped : s))
+          : [mapped, ...archived];
+      });
+      return mapped;
+    },
+    [ensureRegistered],
+  );
+
+  const updateSeries = useCallback(
+    async (
+      seriesId: string,
+      payload: { frequency?: RecurrenceFrequency; isActive?: boolean },
+    ): Promise<{
+      series: SessionSeriesSummary;
+      activeSessionId: string | null;
+    }> => {
+      ensureRegistered();
+      const result = await sessionsApi.updateSeries(seriesId, payload);
+      setSessions((prev) =>
+        prev.map((s) => {
+          if (s.series?.id !== seriesId) return s;
+          const isStaleActive =
+            result.activeSessionId !== null &&
+            s.id !== result.activeSessionId &&
+            (s.status === "planning" ||
+              s.status === "voting" ||
+              s.status === "locked");
+          return {
+            ...s,
+            series: result.series,
+            ...(isStaleActive ? { status: "completed" as const } : {}),
+          };
+        }),
+      );
+      return result;
+    },
+    [ensureRegistered],
+  );
+
   const loadSessionDetail = useCallback(
     async (sessionId: string): Promise<GameSession> => {
       ensureSessionAccess();
@@ -798,7 +898,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         currentSession ?? sessions.find((s) => s.id === sessionId);
 
       if (targetSession) {
-        const optimistic = applyOptimisticRsvp(targetSession, currentUser, rsvp);
+        const optimistic = applyOptimisticRsvp(
+          targetSession,
+          currentUser,
+          rsvp,
+        );
         upsertSession(optimistic);
         onOptimistic?.(optimistic);
       }
@@ -1037,6 +1141,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         reopenSession,
         deleteSession,
         joinSessionByToken,
+        joinSeriesByShareToken,
+        advanceSeries,
+        updateSeries,
         loadSessionDetail,
         loadSessionPool,
         updateRsvp,

@@ -7,6 +7,8 @@ const sessionUpdateMock = vi.fn();
 const sessionDeleteMock = vi.fn();
 const sessionFindUniqueMock = vi.fn();
 const sessionFindManyMock = vi.fn();
+const sessionSeriesFindManyMock = vi.fn();
+const sessionSeriesUpdateMock = vi.fn();
 const userGameFindManyMock = vi.fn();
 
 const txMock = {
@@ -17,6 +19,9 @@ const txMock = {
   session: {
     update: (...args: unknown[]) => sessionUpdateMock(...args),
     delete: (...args: unknown[]) => sessionDeleteMock(...args),
+  },
+  sessionSeries: {
+    update: (...args: unknown[]) => sessionSeriesUpdateMock(...args),
   },
 };
 
@@ -31,6 +36,9 @@ vi.mock('../../../config/prisma.js', () => ({
     session: {
       findUnique: (...args: unknown[]) => sessionFindUniqueMock(...args),
       findMany: (...args: unknown[]) => sessionFindManyMock(...args),
+    },
+    sessionSeries: {
+      findMany: (...args: unknown[]) => sessionSeriesFindManyMock(...args),
     },
     userGame: {
       findMany: (...args: unknown[]) => userGameFindManyMock(...args),
@@ -324,6 +332,7 @@ describe('updateSessionStatus (FOR UPDATE y máquina de estados)', () => {
 describe('listUserSessions canManageSession', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionSeriesFindManyMock.mockResolvedValue([]);
   });
 
   it('calcula canManageSession respetando membresía activa, rol admin, sesiones directas e invitados', async () => {
