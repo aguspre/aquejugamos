@@ -1,6 +1,6 @@
 import {
   CalendarDays,
-  CloudCheck,
+  CheckCircle2,
   CloudOff,
   Dices,
   History,
@@ -44,12 +44,14 @@ export function AppShell({ children }: AppShellProps) {
   } = useAuth();
 
   const votingCount = sessions.filter(
-    (s) => s.status === 'voting' && (s.groupId === activeGroup.id || s.groupId === null),
+    (s) =>
+      s.status === 'voting' &&
+      (!activeGroup || s.groupId === activeGroup.id || s.groupId === null),
   ).length;
 
-  const activeGroupPlayCount = playLogs.filter(
-    (l) => l.groupId === activeGroup.id,
-  ).length;
+  const activeGroupPlayCount = activeGroup
+    ? playLogs.filter((l) => l.groupId === activeGroup.id).length
+    : playLogs.length;
 
   const desktopNavItems = [
     {
@@ -203,7 +205,7 @@ export function AppShell({ children }: AppShellProps) {
               <div className="flex items-center justify-between gap-2 border-t border-border/70 pt-2">
                 {backendSyncStatus === 'synced' && (
                   <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-forest-600">
-                    <CloudCheck className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                     <span>Cuenta conectada</span>
                   </span>
                 )}
@@ -254,8 +256,7 @@ export function AppShell({ children }: AppShellProps) {
                     {currentUser.displayName}
                   </p>
                   <p className="flex items-center gap-1 text-[11px] font-medium text-ink-subtle truncate">
-                    <RefreshCw className="h-3 w-3 shrink-0" aria-hidden="true" />
-                    <span>Modo demo · invitado</span>
+                    <span>Sin sesión iniciada</span>
                   </p>
                 </div>
               </div>
@@ -332,6 +333,47 @@ export function AppShell({ children }: AppShellProps) {
       {/* Main Content */}
       <main className="flex-1 lg:pl-68">
         <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8 pb-28 lg:pb-12">
+          {!authLoading && !isAuthenticated && (
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-forest-200 bg-forest-50/80 px-4 py-3 text-xs text-forest-900">
+              <div className="flex items-center gap-2 min-w-0">
+                <Dices className="h-4 w-4 shrink-0 text-forest-600" aria-hidden="true" />
+                <span className="font-medium">
+                  Iniciá sesión con tu cuenta para cargar tu ludoteca de BGG, tus grupos,
+                  juntadas e historial desde el servidor.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => openAuthModal('signin')}
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-lg bg-forest-600 px-3 py-1 text-xs font-bold text-white hover:bg-forest-700 transition shrink-0"
+              >
+                <LogIn className="h-3.5 w-3.5" aria-hidden="true" />
+                Iniciar sesión
+              </button>
+            </div>
+          )}
+          {isAuthenticated && backendSyncStatus === 'offline' && (
+            <div
+              role="status"
+              className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-ochre-200 bg-ochre-50 px-4 py-3 text-xs text-ochre-700"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <CloudOff className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span className="font-medium">
+                  {backendSyncError ??
+                    'Sesión iniciada en Firebase, pero el backend todavía no sincronizó tu perfil.'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void refreshBackendSync()}
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-lg bg-ochre-500 px-3 py-1 text-xs font-bold text-white hover:bg-ochre-700 transition shrink-0"
+              >
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                Reintentar conexión
+              </button>
+            </div>
+          )}
           {children}
         </div>
       </main>

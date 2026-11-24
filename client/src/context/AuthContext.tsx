@@ -1,4 +1,4 @@
-import { FirebaseError } from 'firebase/app';
+import { FirebaseError } from "firebase/app";
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
@@ -8,7 +8,7 @@ import {
   signOut as firebaseSignOut,
   updateProfile as firebaseUpdateProfile,
   type User as FirebaseUser,
-} from 'firebase/auth';
+} from "firebase/auth";
 import {
   createContext,
   useCallback,
@@ -17,17 +17,15 @@ import {
   useMemo,
   useState,
   type ReactNode,
-} from 'react';
-import {
-  ApiError,
-  syncBackendUser,
-  updateBackendUser,
-  type BackendUserProfile,
-} from '../lib/api';
-import { firebaseAuth, googleProvider } from '../lib/firebase';
+} from "react";
+import { ApiError } from "../api/client";
+import { authApi, type AuthUserResponse } from "../api/endpoints";
+import { firebaseAuth, googleProvider } from "../lib/firebase";
 
-export type AuthModalTab = 'signin' | 'signup';
-export type BackendSyncStatus = 'idle' | 'syncing' | 'synced' | 'offline';
+export type BackendUserProfile = AuthUserResponse;
+
+export type AuthModalTab = "signin" | "signup";
+export type BackendSyncStatus = "idle" | "syncing" | "synced" | "offline";
 
 interface SignUpInput {
   email: string;
@@ -64,29 +62,29 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function formatFirebaseAuthError(error: unknown): string {
   if (error instanceof FirebaseError) {
     switch (error.code) {
-      case 'auth/invalid-credential':
-      case 'auth/wrong-password':
-      case 'auth/user-not-found':
-        return 'Email o contraseña incorrectos.';
-      case 'auth/invalid-email':
-        return 'El formato del email no es válido.';
-      case 'auth/email-already-in-use':
-        return 'Ya existe una cuenta registrada con ese email.';
-      case 'auth/weak-password':
-        return 'La contraseña debe tener al menos 6 caracteres.';
-      case 'auth/popup-closed-by-user':
-      case 'auth/cancelled-popup-request':
-        return 'Se cerró la ventana de acceso con Google antes de completar.';
-      case 'auth/popup-blocked':
-        return 'El navegador bloqueó la ventana emergente de Google. Permití popups para este sitio.';
-      case 'auth/unauthorized-domain':
-        return 'Este dominio no está autorizado en Firebase Console (Authentication → Settings → Authorized domains).';
-      case 'auth/operation-not-allowed':
-        return 'Este método de acceso todavía no está habilitado en Firebase Console (Authentication → Sign-in method).';
-      case 'auth/too-many-requests':
-        return 'Demasiados intentos seguidos. Esperá unos minutos antes de volver a intentar.';
-      case 'auth/network-request-failed':
-        return 'No se pudo conectar con Firebase. Revisá tu conexión a internet.';
+      case "auth/invalid-credential":
+      case "auth/wrong-password":
+      case "auth/user-not-found":
+        return "Email o contraseña incorrectos.";
+      case "auth/invalid-email":
+        return "El formato del email no es válido.";
+      case "auth/email-already-in-use":
+        return "Ya existe una cuenta registrada con ese email.";
+      case "auth/weak-password":
+        return "La contraseña debe tener al menos 6 caracteres.";
+      case "auth/popup-closed-by-user":
+      case "auth/cancelled-popup-request":
+        return "Se cerró la ventana de acceso con Google antes de completar.";
+      case "auth/popup-blocked":
+        return "El navegador bloqueó la ventana emergente de Google. Permití popups para este sitio.";
+      case "auth/unauthorized-domain":
+        return "Este dominio no está autorizado en Firebase Console (Authentication → Settings → Authorized domains).";
+      case "auth/operation-not-allowed":
+        return "Este método de acceso todavía no está habilitado en Firebase Console (Authentication → Sign-in method).";
+      case "auth/too-many-requests":
+        return "Demasiados intentos seguidos. Esperá unos minutos antes de volver a intentar.";
+      case "auth/network-request-failed":
+        return "No se pudo conectar con Firebase. Revisá tu conexión a internet.";
       default:
         return `Error de autenticación (${error.code}).`;
     }
@@ -100,17 +98,20 @@ export function formatFirebaseAuthError(error: unknown): string {
     return error.message;
   }
 
-  return 'Ocurrió un error inesperado al autenticar.';
+  return "Ocurrió un error inesperado al autenticar.";
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
-  const [backendUser, setBackendUser] = useState<BackendUserProfile | null>(null);
-  const [backendSyncStatus, setBackendSyncStatus] = useState<BackendSyncStatus>('idle');
+  const [backendUser, setBackendUser] = useState<BackendUserProfile | null>(
+    null,
+  );
+  const [backendSyncStatus, setBackendSyncStatus] =
+    useState<BackendSyncStatus>("idle");
   const [backendSyncError, setBackendSyncError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authModalTab, setAuthModalTab] = useState<AuthModalTab>('signin');
+  const [authModalTab, setAuthModalTab] = useState<AuthModalTab>("signin");
 
   const syncWithBackend = useCallback(
     async (
@@ -118,20 +119,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       overrides?: { displayName?: string; bggUsername?: string | null },
       forceRefreshToken = false,
     ) => {
-      setBackendSyncStatus('syncing');
+      setBackendSyncStatus("syncing");
       setBackendSyncError(null);
       try {
         const token = await user.getIdToken(forceRefreshToken);
-        const synced = await syncBackendUser(overrides, token);
+        const { user: synced } = await authApi.sync(overrides, token);
         setBackendUser(synced);
-        setBackendSyncStatus('synced');
+        setBackendSyncStatus("synced");
       } catch (error) {
-        setBackendSyncStatus('offline');
+        setBackendSyncStatus("offline");
         if (error instanceof ApiError) {
           setBackendSyncError(error.message);
         } else {
           setBackendSyncError(
-            'El backend no respondió para sincronizar tu perfil en PostgreSQL.',
+            "El backend no respondió para sincronizar tu perfil en PostgreSQL.",
           );
         }
       }
@@ -148,7 +149,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         void syncWithBackend(user);
       } else {
         setBackendUser(null);
-        setBackendSyncStatus('idle');
+        setBackendSyncStatus("idle");
         setBackendSyncError(null);
       }
     });
@@ -156,7 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => unsubscribe();
   }, [syncWithBackend]);
 
-  const openAuthModal = useCallback((tab: AuthModalTab = 'signin') => {
+  const openAuthModal = useCallback((tab: AuthModalTab = "signin") => {
     setAuthModalTab(tab);
     setAuthModalOpen(true);
   }, []);
@@ -215,7 +216,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     await firebaseSignOut(firebaseAuth);
     setBackendUser(null);
-    setBackendSyncStatus('idle');
+    setBackendSyncStatus("idle");
     setBackendSyncError(null);
   }, []);
 
@@ -229,15 +230,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const current = firebaseAuth.currentUser;
       if (!current) return;
 
-      if (patch.displayName && patch.displayName.trim() !== current.displayName) {
+      if (
+        patch.displayName &&
+        patch.displayName.trim() !== current.displayName
+      ) {
         await firebaseUpdateProfile(current, {
           displayName: patch.displayName.trim(),
         });
       }
 
-      const updated = await updateBackendUser(patch);
+      const { user: updated } = await authApi.updateMe(patch);
       setBackendUser(updated);
-      setBackendSyncStatus('synced');
+      setBackendSyncStatus("synced");
       setBackendSyncError(null);
     },
     [],
@@ -296,7 +300,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
   if (!ctx) {
-    throw new Error('useAuth debe usarse dentro de AuthProvider');
+    throw new Error("useAuth debe usarse dentro de AuthProvider");
   }
   return ctx;
 }

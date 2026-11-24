@@ -83,16 +83,18 @@ export function GameCard({
         </div>
 
         {/* Top-right BGG rating pill */}
-        <div
-          className="absolute right-2.5 top-2.5 inline-flex items-center gap-1 rounded-full bg-surface/95 px-2.5 py-0.5 text-xs font-extrabold text-ink shadow-xs backdrop-blur-xs num-tabular"
-          title={`Rating en BoardGameGeek: ${game.bggRating.toFixed(1)}`}
-        >
-          <Star
-            className="h-3.5 w-3.5 fill-ochre-500 text-ochre-500"
-            aria-hidden="true"
-          />
-          <span>{game.bggRating.toFixed(1)}</span>
-        </div>
+        {game.bggRating > 0 && (
+          <div
+            className="absolute right-2.5 top-2.5 inline-flex items-center gap-1 rounded-full bg-surface/95 px-2.5 py-0.5 text-xs font-extrabold text-ink shadow-xs backdrop-blur-xs num-tabular"
+            title={`Rating en BoardGameGeek: ${game.bggRating.toFixed(1)}`}
+          >
+            <Star
+              className="h-3.5 w-3.5 fill-ochre-500 text-ochre-500"
+              aria-hidden="true"
+            />
+            <span>{game.bggRating.toFixed(1)}</span>
+          </div>
+        )}
       </div>
 
       {/* Body */}
@@ -113,7 +115,7 @@ export function GameCard({
               )}
             </h3>
             <p className="mt-0.5 text-xs text-ink-subtle num-tabular">
-              {game.yearPublished}
+              {game.yearPublished > 0 ? game.yearPublished : 'Sin año'}
               {personalRating !== undefined && (
                 <span className="ml-2 font-semibold text-forest-600">
                   · Tu nota {personalRating.toFixed(1)}

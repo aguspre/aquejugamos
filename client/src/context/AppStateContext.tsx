@@ -1,16 +1,33 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
-import { useAuth } from './AuthContext';
 import {
-  CURRENT_USER,
-  DEMO_JOINABLE_GROUP,
-  MOCK_GAMES,
-  MOCK_GROUPS,
-  MOCK_OWNERSHIP_BY_GAME,
-  MOCK_PERSONAL_LIBRARY,
-  MOCK_PLAY_LOGS,
-  MOCK_SESSIONS,
-  MOCK_USERS,
-} from '../data/mockData';
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
+import { ApiError } from "../api/client";
+import {
+  bggApi,
+  groupsApi,
+  libraryApi,
+  playLogsApi,
+  sessionsApi,
+  type BggSearchResult,
+  type BggSyncResponse,
+} from "../api/endpoints";
+import {
+  getInitials,
+  mapGroup,
+  mapLibraryItem,
+  mapPlayLog,
+  mapPoolGame,
+  mapSessionDetail,
+  mapSessionListItem,
+  mapUserSummary,
+  type ApiGroupStats,
+} from "../api/mappers";
 import type {
   Game,
   GameSession,
@@ -23,7 +40,14 @@ import type {
   UserGameStatus,
   UserSummary,
   VotingMode,
-} from '../types/domain';
+} from "../types/domain";
+import { useAuth } from "./AuthContext";
+
+export interface EnrichedGroup extends Group {
+  gamesCount: number;
+  sessionsCount: number;
+  memberOwnedCounts: Record<string, number>;
+}
 
 export interface CreateSessionInput {
   title: string;
@@ -48,42 +72,77 @@ export interface CreatePlayLogInput {
 
 interface AppStateContextValue {
   currentUser: UserSummary;
+  isBootstrapping: boolean;
   users: UserSummary[];
-  groups: Group[];
-  activeGroupId: string;
-  activeGroup: Group;
+  groups: EnrichedGroup[];
+  activeGroupId: string | null;
+  activeGroup: EnrichedGroup | null;
+  activeGroupStats: ApiGroupStats | null;
   setActiveGroupId: (groupId: string) => void;
   allGames: Game[];
   library: LibraryGameItem[];
   sessions: GameSession[];
   playLogs: PlayLog[];
   lastBggSyncLabel: string;
-  ownershipByGame: Record<string, UserSummary[]>;
+  refreshAll: () => Promise<void>;
   // Group actions
-  createGroup: (name: string) => Group;
-  joinGroupByCode: (inviteCode: string) => { group: Group; alreadyMember: boolean };
-  regenerateInviteCode: (groupId: string) => string;
-  toggleMemberRole: (groupId: string, userId: string) => void;
-  removeGroupMember: (groupId: string, userId: string) => void;
+  createGroup: (name: string) => Promise<EnrichedGroup>;
+  joinGroupByCode: (
+    inviteCode: string,
+  ) => Promise<{ group: EnrichedGroup; alreadyMember: boolean }>;
+  regenerateInviteCode: (groupId: string) => Promise<string>;
+  toggleMemberRole: (groupId: string, userId: string) => Promise<void>;
+  removeGroupMember: (groupId: string, userId: string) => Promise<void>;
   getUserOwnedGameCount: (userId: string) => number;
   getGroupGameCount: (groupId: string) => number;
-  // Library actions
-  syncWithBgg: () => Promise<{ added: number; updated: number }>;
+  // Library & BGG actions
+  syncWithBgg: (
+    bggUsername?: string,
+    forceRefresh?: boolean,
+  ) => Promise<BggSyncResponse["sync"]>;
+  searchBgg: (query: string) => Promise<BggSearchResult[]>;
+  importBggGame: (
+    bggId: number,
+    status?: UserGameStatus,
+  ) => Promise<LibraryGameItem>;
   updateLibraryItem: (
     gameId: string,
-    patch: Partial<Pick<LibraryGameItem, 'status' | 'personalRating' | 'notes'>>,
-  ) => void;
-  addGameToLibrary: (game: Game, status?: UserGameStatus) => void;
+    patch: Partial<
+      Pick<LibraryGameItem, "status" | "personalRating" | "notes">
+    >,
+  ) => Promise<void>;
+  removeLibraryItem: (gameId: string) => Promise<void>;
   // Session actions
-  createSession: (input: CreateSessionInput) => GameSession;
-  updateRsvp: (sessionId: string, userId: string, rsvp: RsvpStatus) => void;
-  proposeGame: (sessionId: string, game: Game, note?: string) => void;
-  removeProposal: (sessionId: string, proposalId: string) => void;
-  toggleVote: (sessionId: string, proposalId: string, rank?: number) => void;
-  toggleSessionLock: (sessionId: string) => void;
-  getSessionPool: (sessionId: string) => SessionGameItem[];
+  createSession: (input: CreateSessionInput) => Promise<GameSession>;
+  joinSessionByToken: (
+    inviteToken: string,
+    rsvp?: RsvpStatus,
+  ) => Promise<GameSession>;
+  loadSessionDetail: (sessionId: string) => Promise<GameSession>;
+  loadSessionPool: (sessionId: string) => Promise<SessionGameItem[]>;
+  updateRsvp: (
+    sessionId: string,
+    userId: string,
+    rsvp: RsvpStatus,
+  ) => Promise<GameSession>;
+  proposeGame: (
+    sessionId: string,
+    game: Game,
+    note?: string,
+  ) => Promise<GameSession>;
+  removeProposal: (
+    sessionId: string,
+    proposalId: string,
+  ) => Promise<GameSession>;
+  toggleVote: (
+    sessionId: string,
+    proposalId: string,
+    rank?: number,
+  ) => Promise<GameSession>;
+  toggleSessionLock: (sessionId: string) => Promise<GameSession>;
   // Play log actions
-  addPlayLog: (input: CreatePlayLogInput) => PlayLog;
+  addPlayLog: (input: CreatePlayLogInput) => Promise<PlayLog>;
+  deletePlayLog: (playLogId: string) => Promise<void>;
   // Global LogPlayModal trigger
   openLogPlayModal: (prefill?: {
     gameId?: string;
@@ -103,43 +162,81 @@ interface AppStateContextValue {
   closeLogPlayModal: () => void;
 }
 
-const AppStateContext = createContext<AppStateContextValue | null>(null);
+const ACTIVE_GROUP_STORAGE_KEY = "aquejugamos_active_group";
 
-const RANK_POINTS: Record<number, number> = {
-  1: 3,
-  2: 2,
-  3: 1,
+const GUEST_USER: UserSummary = {
+  id: "",
+  displayName: "Invitado",
+  initials: "IN",
+  accentColor: "#1E4D3B",
 };
 
-function generateInviteCode(groupName: string): string {
-  const prefix = groupName
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-zA-Z0-9]/g, '')
-    .toUpperCase()
-    .slice(0, 7);
-  const suffix = Math.random().toString(36).substring(2, 5).toUpperCase();
-  return `${prefix || 'MESA'}-${suffix}`;
-}
+const AppStateContext = createContext<AppStateContextValue | null>(null);
 
-function buildInitials(name: string): string {
-  const parts = name
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-  if (parts.length === 0) return 'JG';
-  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
-  return `${parts[0]![0] ?? ''}${parts[parts.length - 1]![0] ?? ''}`.toUpperCase();
+function formatRelativeSync(isoDate: string | null | undefined): string {
+  if (!isoDate) return "Nunca sincronizada";
+  const date = new Date(isoDate);
+  if (Number.isNaN(date.getTime())) return "Sincronizada";
+  const diffMs = Date.now() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return "Recién ahora";
+  if (diffMin < 60) return `Hace ${diffMin} min`;
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) return `Hace ${diffHours} h`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `Hace ${diffDays} ${diffDays === 1 ? "día" : "días"}`;
 }
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
-  const { firebaseUser, backendUser } = useAuth();
-  const [groups, setGroups] = useState<Group[]>(MOCK_GROUPS);
-  const [activeGroupId, setActiveGroupId] = useState<string>(MOCK_GROUPS[0]!.id);
-  const [library, setLibrary] = useState<LibraryGameItem[]>(MOCK_PERSONAL_LIBRARY);
-  const [sessions, setSessions] = useState<GameSession[]>(MOCK_SESSIONS);
-  const [playLogs, setPlayLogs] = useState<PlayLog[]>(MOCK_PLAY_LOGS);
-  const [lastBggSyncLabel, setLastBggSyncLabel] = useState<string>('Hace 2 horas');
+  const {
+    firebaseUser,
+    backendUser,
+    isAuthenticated,
+    loading: authLoading,
+    backendSyncStatus,
+    openAuthModal,
+    refreshBackendSync,
+  } = useAuth();
+
+  const isBackendReady = isAuthenticated && backendUser !== null;
+
+  const currentUser = useMemo<UserSummary>(() => {
+    if (backendUser) {
+      return {
+        ...mapUserSummary(backendUser),
+        avatarUrl: backendUser.avatarUrl ?? firebaseUser?.photoURL ?? undefined,
+      };
+    }
+    if (firebaseUser) {
+      const displayName =
+        firebaseUser.displayName?.trim() ||
+        firebaseUser.email?.split("@")[0] ||
+        "Jugador";
+      return {
+        id: firebaseUser.uid,
+        displayName,
+        avatarUrl: firebaseUser.photoURL ?? undefined,
+        initials: getInitials(displayName),
+        accentColor: "#1E4D3B",
+      };
+    }
+    return GUEST_USER;
+  }, [backendUser, firebaseUser]);
+
+  const [isBootstrapping, setIsBootstrapping] = useState(true);
+  const [groups, setGroups] = useState<EnrichedGroup[]>([]);
+  const [activeGroupId, setActiveGroupIdState] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(ACTIVE_GROUP_STORAGE_KEY);
+    } catch {
+      return null;
+    }
+  });
+  const [activeGroupStats, setActiveGroupStats] =
+    useState<ApiGroupStats | null>(null);
+  const [library, setLibrary] = useState<LibraryGameItem[]>([]);
+  const [sessions, setSessions] = useState<GameSession[]>([]);
+  const [playLogs, setPlayLogs] = useState<PlayLog[]>([]);
   const [logPlayModalPrefill, setLogPlayModalPrefill] = useState<{
     open: boolean;
     gameId?: string;
@@ -149,505 +246,559 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     playerIds?: string[];
   }>({ open: false });
 
-  const currentUser = useMemo<UserSummary>(() => {
-    if (!firebaseUser) {
-      return CURRENT_USER;
+  const ensureAuthenticated = useCallback(() => {
+    if (!isAuthenticated) {
+      openAuthModal("signin");
+      throw new ApiError(401, "AUTH_REQUIRED", "Iniciá sesión para continuar.");
     }
-
-    const displayName =
-      backendUser?.displayName?.trim() ||
-      firebaseUser.displayName?.trim() ||
-      firebaseUser.email?.split('@')[0] ||
-      CURRENT_USER.displayName;
-
-    return {
-      ...CURRENT_USER,
-      displayName,
-      avatarUrl: backendUser?.avatarUrl ?? firebaseUser.photoURL ?? undefined,
-      bggUsername: backendUser?.bggUsername ?? undefined,
-      initials: buildInitials(displayName),
-    };
-  }, [firebaseUser, backendUser]);
-
-  const users = useMemo<UserSummary[]>(
-    () => MOCK_USERS.map((u) => (u.id === CURRENT_USER.id ? currentUser : u)),
-    [currentUser],
-  );
-
-  const activeGroup = useMemo(
-    () => groups.find((g) => g.id === activeGroupId) ?? groups[0]!,
-    [groups, activeGroupId],
-  );
-
-  // Derive live ownership map incorporating Agustín's live library status
-  const ownershipByGame = useMemo(() => {
-    const map: Record<string, UserSummary[]> = {};
-    for (const game of MOCK_GAMES) {
-      const baseOwners = (MOCK_OWNERSHIP_BY_GAME[game.id] ?? []).filter(
-        (u) => u.id !== CURRENT_USER.id,
+    if (!backendUser) {
+      throw new ApiError(
+        503,
+        "BACKEND_NOT_SYNCED",
+        "El servidor todavía no sincronizó tu cuenta. Revisá la conexión con el backend.",
       );
-      const myEntry = library.find((item) => item.id === game.id);
-      if (myEntry?.status === 'owned') {
-        map[game.id] = [currentUser, ...baseOwners];
-      } else {
-        map[game.id] = baseOwners;
-      }
     }
-    return map;
-  }, [library, currentUser]);
+  }, [isAuthenticated, backendUser, openAuthModal]);
 
-  const getUserOwnedGameCount = (userId: string): number => {
-    let count = 0;
-    for (const game of MOCK_GAMES) {
-      if (game.isExpansion) continue;
-      if (ownershipByGame[game.id]?.some((o) => o.id === userId)) {
-        count += 1;
-      }
+  const setActiveGroupId = useCallback((groupId: string) => {
+    setActiveGroupIdState(groupId);
+    try {
+      localStorage.setItem(ACTIVE_GROUP_STORAGE_KEY, groupId);
+    } catch {
+      // ignore storage errors
     }
-    return count;
-  };
+  }, []);
 
-  const getGroupGameCount = (groupId: string): number => {
-    const group = groups.find((g) => g.id === groupId);
-    if (!group) return 0;
-    const memberIds = new Set(group.members.map((m) => m.user.id));
-    let count = 0;
-    for (const game of MOCK_GAMES) {
-      if (game.isExpansion) continue;
-      if (ownershipByGame[game.id]?.some((o) => memberIds.has(o.id))) {
-        count += 1;
+  const activeGroup = useMemo(() => {
+    if (groups.length === 0) return null;
+    return groups.find((g) => g.id === activeGroupId) ?? groups[0]!;
+  }, [groups, activeGroupId]);
+
+  const refreshGroupStats = useCallback(
+    async (groupId: string | null) => {
+      if (!isBackendReady || !groupId) {
+        setActiveGroupStats(null);
+        return;
       }
-    }
-    return count;
-  };
-
-  const createGroup = (name: string): Group => {
-    const trimmed = name.trim();
-    const created: Group = {
-      id: `grp-${Date.now().toString(36)}`,
-      name: trimmed,
-      inviteCode: generateInviteCode(trimmed),
-      createdBy: CURRENT_USER.id,
-      members: [
-        {
-          user: CURRENT_USER,
-          role: 'admin',
-          joinedAt: new Date().toISOString(),
-        },
-      ],
-    };
-    setGroups((prev) => [created, ...prev]);
-    setActiveGroupId(created.id);
-    return created;
-  };
-
-  const joinGroupByCode = (
-    rawCode: string,
-  ): { group: Group; alreadyMember: boolean } => {
-    const normalized = rawCode.trim().toUpperCase();
-
-    const existing = groups.find((g) => g.inviteCode.toUpperCase() === normalized);
-    if (existing) {
-      const isMember = existing.members.some((m) => m.user.id === CURRENT_USER.id);
-      if (!isMember) {
-        const updated: Group = {
-          ...existing,
-          members: [
-            ...existing.members,
-            { user: CURRENT_USER, role: 'member', joinedAt: new Date().toISOString() },
-          ],
-        };
-        setGroups((prev) => prev.map((g) => (g.id === existing.id ? updated : g)));
-        setActiveGroupId(updated.id);
-        return { group: updated, alreadyMember: false };
+      try {
+        const { stats } = await playLogsApi.getGroupStats(groupId);
+        setActiveGroupStats(stats);
+      } catch {
+        setActiveGroupStats(null);
       }
-      setActiveGroupId(existing.id);
-      return { group: existing, alreadyMember: true };
+    },
+    [isBackendReady],
+  );
+
+  const refreshAll = useCallback(async () => {
+    if (!isBackendReady) {
+      setGroups([]);
+      setLibrary([]);
+      setSessions([]);
+      setPlayLogs([]);
+      setActiveGroupStats(null);
+      setIsBootstrapping(false);
+      return;
     }
 
-    // Demo joinable group or simulated group for any code entered
-    const joined: Group =
-      normalized === DEMO_JOINABLE_GROUP.inviteCode
-        ? {
-            ...DEMO_JOINABLE_GROUP,
-            members: [
-              ...DEMO_JOINABLE_GROUP.members,
-              { user: CURRENT_USER, role: 'member', joinedAt: new Date().toISOString() },
-            ],
+    setIsBootstrapping(true);
+    try {
+      const [groupsRes, libraryRes, sessionsRes, logsRes] = await Promise.all([
+        groupsApi.list(),
+        libraryApi.list(),
+        sessionsApi.list(),
+        playLogsApi.list(),
+      ]);
+
+      const mappedGroups = groupsRes.groups.map(mapGroup);
+      setGroups(mappedGroups);
+      setLibrary(libraryRes.items.map(mapLibraryItem));
+      setSessions(sessionsRes.sessions.map(mapSessionListItem));
+      setPlayLogs(logsRes.playLogs.map(mapPlayLog));
+
+      setActiveGroupIdState((prev) => {
+        if (prev && mappedGroups.some((g) => g.id === prev)) {
+          return prev;
+        }
+        return mappedGroups[0]?.id ?? null;
+      });
+    } finally {
+      setIsBootstrapping(false);
+    }
+  }, [isBackendReady]);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (isAuthenticated && backendSyncStatus === "syncing") {
+      setIsBootstrapping(true);
+      return;
+    }
+    void refreshAll();
+  }, [authLoading, isAuthenticated, backendSyncStatus, refreshAll]);
+
+  useEffect(() => {
+    void refreshGroupStats(activeGroup?.id ?? null);
+  }, [activeGroup?.id, refreshGroupStats]);
+
+  const users = useMemo<UserSummary[]>(() => {
+    const map = new Map<string, UserSummary>();
+    if (currentUser.id) {
+      map.set(currentUser.id, currentUser);
+    }
+    for (const group of groups) {
+      for (const m of group.members) {
+        map.set(m.user.id, m.user);
+      }
+    }
+    return Array.from(map.values());
+  }, [currentUser, groups]);
+
+  const allGames = useMemo<Game[]>(() => {
+    const map = new Map<string, Game>();
+    for (const item of library) {
+      map.set(item.id, item);
+    }
+    for (const session of sessions) {
+      for (const proposal of session.proposals) {
+        if (!map.has(proposal.game.id)) {
+          map.set(proposal.game.id, proposal.game);
+        }
+      }
+    }
+    for (const log of playLogs) {
+      if (!map.has(log.game.id)) {
+        map.set(log.game.id, log.game);
+      }
+    }
+    return Array.from(map.values());
+  }, [library, sessions, playLogs]);
+
+  const lastBggSyncLabel = formatRelativeSync(backendUser?.lastBggSyncAt);
+
+  const getUserOwnedGameCount = useCallback(
+    (userId: string): number => {
+      for (const group of groups) {
+        if (userId in group.memberOwnedCounts) {
+          return group.memberOwnedCounts[userId] ?? 0;
+        }
+      }
+      if (userId && userId === currentUser.id) {
+        return library.filter((g) => g.status === "owned" && !g.isExpansion)
+          .length;
+      }
+      return 0;
+    },
+    [groups, currentUser.id, library],
+  );
+
+  const getGroupGameCount = useCallback(
+    (groupId: string): number => {
+      return groups.find((g) => g.id === groupId)?.gamesCount ?? 0;
+    },
+    [groups],
+  );
+
+  // =========================================================================
+  // Group actions (100% real API)
+  // =========================================================================
+
+  const createGroup = useCallback(
+    async (name: string): Promise<EnrichedGroup> => {
+      ensureAuthenticated();
+      const { group } = await groupsApi.create(name.trim());
+      const mapped = mapGroup(group);
+      setGroups((prev) => [mapped, ...prev]);
+      setActiveGroupId(mapped.id);
+      return mapped;
+    },
+    [ensureAuthenticated, setActiveGroupId],
+  );
+
+  const joinGroupByCode = useCallback(
+    async (
+      rawCode: string,
+    ): Promise<{ group: EnrichedGroup; alreadyMember: boolean }> => {
+      ensureAuthenticated();
+      const { group, alreadyMember } = await groupsApi.join(rawCode.trim());
+      const mapped = mapGroup(group);
+      setGroups((prev) => {
+        const exists = prev.some((g) => g.id === mapped.id);
+        return exists
+          ? prev.map((g) => (g.id === mapped.id ? mapped : g))
+          : [mapped, ...prev];
+      });
+      setActiveGroupId(mapped.id);
+      return { group: mapped, alreadyMember };
+    },
+    [ensureAuthenticated, setActiveGroupId],
+  );
+
+  const regenerateInviteCode = useCallback(
+    async (groupId: string): Promise<string> => {
+      ensureAuthenticated();
+      const { inviteCode } = await groupsApi.regenerateCode(groupId);
+      setGroups((prev) =>
+        prev.map((g) => (g.id === groupId ? { ...g, inviteCode } : g)),
+      );
+      return inviteCode;
+    },
+    [ensureAuthenticated],
+  );
+
+  const toggleMemberRole = useCallback(
+    async (groupId: string, userId: string): Promise<void> => {
+      ensureAuthenticated();
+      const targetGroup = groups.find((g) => g.id === groupId);
+      const targetMember = targetGroup?.members.find(
+        (m) => m.user.id === userId,
+      );
+      if (!targetMember) return;
+      const nextRole = targetMember.role === "admin" ? "member" : "admin";
+
+      const { group } = await groupsApi.updateMemberRole(
+        groupId,
+        userId,
+        nextRole,
+      );
+      const mapped = mapGroup(group);
+      setGroups((prev) => prev.map((g) => (g.id === groupId ? mapped : g)));
+    },
+    [ensureAuthenticated, groups],
+  );
+
+  const removeGroupMember = useCallback(
+    async (groupId: string, userId: string): Promise<void> => {
+      ensureAuthenticated();
+      const { groupDeleted } = await groupsApi.removeMember(groupId, userId);
+      if (groupDeleted || userId === currentUser.id) {
+        setGroups((prev) => {
+          const remaining = prev.filter((g) => g.id !== groupId);
+          if (activeGroupId === groupId) {
+            setActiveGroupIdState(remaining[0]?.id ?? null);
           }
-        : {
-            id: `grp-join-${Date.now().toString(36)}`,
-            name: `Mesa ${normalized}`,
-            inviteCode: normalized,
-            createdBy: MOCK_USERS[1]!.id,
-            members: [
-              {
-                user: MOCK_USERS[1]!,
-                role: 'admin',
-                joinedAt: '2026-09-10T18:00:00-03:00',
-              },
-              {
-                user: CURRENT_USER,
-                role: 'member',
-                joinedAt: new Date().toISOString(),
-              },
-            ],
-          };
-
-    setGroups((prev) => [joined, ...prev]);
-    setActiveGroupId(joined.id);
-    return { group: joined, alreadyMember: false };
-  };
-
-  const regenerateInviteCode = (groupId: string): string => {
-    let nextCode = '';
-    setGroups((prev) =>
-      prev.map((group) => {
-        if (group.id !== groupId) return group;
-        nextCode = generateInviteCode(group.name);
-        return { ...group, inviteCode: nextCode };
-      }),
-    );
-    return nextCode;
-  };
-
-  const toggleMemberRole = (groupId: string, userId: string) => {
-    setGroups((prev) =>
-      prev.map((group) => {
-        if (group.id !== groupId) return group;
-        return {
-          ...group,
-          members: group.members.map((m) =>
-            m.user.id === userId
-              ? { ...m, role: m.role === 'admin' ? 'member' : 'admin' }
-              : m,
-          ),
-        };
-      }),
-    );
-  };
-
-  const removeGroupMember = (groupId: string, userId: string) => {
-    setGroups((prev) => {
-      const next = prev
-        .map((group) => {
-          if (group.id !== groupId) return group;
-          const remaining = group.members.filter((m) => m.user.id !== userId);
-          return { ...group, members: remaining };
-        })
-        .filter((g) => g.members.some((m) => m.user.id === CURRENT_USER.id));
-
-      if (next.length > 0 && !next.some((g) => g.id === activeGroupId)) {
-        setActiveGroupId(next[0]!.id);
+          return remaining;
+        });
+      } else {
+        const { groups: refreshed } = await groupsApi.list();
+        setGroups(refreshed.map(mapGroup));
       }
-      return next.length > 0 ? next : prev;
-    });
-  };
+    },
+    [ensureAuthenticated, currentUser.id, activeGroupId],
+  );
 
-  const syncWithBgg = async (): Promise<{ added: number; updated: number }> => {
-    await new Promise((resolve) => setTimeout(resolve, 1100));
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    setLastBggSyncLabel('Recién ahora');
-    return { added: 0, updated: library.filter((g) => g.status === 'owned').length };
-  };
+  // =========================================================================
+  // Library & BGG actions (100% real API)
+  // =========================================================================
 
-  const updateLibraryItem = (
-    gameId: string,
-    patch: Partial<Pick<LibraryGameItem, 'status' | 'personalRating' | 'notes'>>,
-  ) => {
-    setLibrary((prev) =>
-      prev.map((item) => (item.id === gameId ? { ...item, ...patch } : item)),
-    );
-  };
+  const syncWithBgg = useCallback(
+    async (
+      bggUsername?: string,
+      forceRefresh = false,
+    ): Promise<BggSyncResponse["sync"]> => {
+      ensureAuthenticated();
+      const { sync } = await bggApi.sync({ bggUsername, forceRefresh });
+      const [libraryRes, groupsRes] = await Promise.all([
+        libraryApi.list(),
+        groupsApi.list(),
+        refreshBackendSync(),
+      ]);
+      setLibrary(libraryRes.items.map(mapLibraryItem));
+      setGroups(groupsRes.groups.map(mapGroup));
+      return sync;
+    },
+    [ensureAuthenticated, refreshBackendSync],
+  );
 
-  const addGameToLibrary = (game: Game, status: UserGameStatus = 'owned') => {
-    setLibrary((prev) => {
-      const existing = prev.find((item) => item.id === game.id);
-      if (existing) {
-        return prev.map((item) => (item.id === game.id ? { ...item, status } : item));
-      }
-      return [{ ...game, status }, ...prev];
-    });
-  };
+  const searchBgg = useCallback(
+    async (query: string): Promise<BggSearchResult[]> => {
+      ensureAuthenticated();
+      const { results } = await bggApi.search(query);
+      return results;
+    },
+    [ensureAuthenticated],
+  );
 
-  const createSession = (input: CreateSessionInput): GameSession => {
-    const id = `session-${Date.now().toString(36)}`;
-    const slug = input.title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 14);
+  const importBggGame = useCallback(
+    async (
+      bggId: number,
+      status: UserGameStatus = "owned",
+    ): Promise<LibraryGameItem> => {
+      ensureAuthenticated();
+      const { item } = await bggApi.importGame(bggId, { status });
+      const mapped = mapLibraryItem(item);
+      setLibrary((prev) => {
+        const exists = prev.some((i) => i.id === mapped.id);
+        return exists
+          ? prev.map((i) => (i.id === mapped.id ? mapped : i))
+          : [mapped, ...prev];
+      });
+      return mapped;
+    },
+    [ensureAuthenticated],
+  );
 
-    const targetGroup = input.groupId
-      ? groups.find((g) => g.id === input.groupId)
-      : undefined;
-
-    const invitedUsers = targetGroup
-      ? targetGroup.members.map((m) => m.user)
-      : [CURRENT_USER];
-
-    const newSession: GameSession = {
-      id,
-      groupId: input.groupId,
-      groupName: targetGroup?.name ?? input.groupName,
-      title: input.title,
-      scheduledAt: input.scheduledAt,
-      location: input.location,
-      host: CURRENT_USER,
-      status: 'voting',
-      votingMode: input.votingMode,
-      maxVotesPerUser:
-        input.votingMode === 'single_choice'
-          ? 1
-          : input.votingMode === 'ranked_top3'
-            ? 3
-            : input.maxVotesPerUser,
-      inviteToken: `${slug || 'juntada'}-${Math.floor(100 + Math.random() * 900)}`,
-      participants: invitedUsers.map((user) => ({
-        user,
-        rsvp: user.id === CURRENT_USER.id ? 'going' : 'maybe',
-      })),
-      proposals: [],
-    };
-    setSessions((prev) => [newSession, ...prev]);
-    return newSession;
-  };
-
-  const updateRsvp = (sessionId: string, userId: string, rsvp: RsvpStatus) => {
-    setSessions((prev) =>
-      prev.map((session) => {
-        if (session.id !== sessionId) return session;
-        return {
-          ...session,
-          participants: session.participants.map((p) =>
-            p.user.id === userId ? { ...p, rsvp } : p,
-          ),
-        };
-      }),
-    );
-  };
-
-  const proposeGame = (sessionId: string, game: Game, note?: string) => {
-    setSessions((prev) =>
-      prev.map((session) => {
-        if (session.id !== sessionId) return session;
-        if (session.proposals.some((p) => p.game.id === game.id)) return session;
-
-        const goingIds = new Set(
-          session.participants
-            .filter((p) => p.rsvp === 'going')
-            .map((p) => p.user.id),
-        );
-        const owners = (ownershipByGame[game.id] ?? []).filter((o) =>
-          goingIds.has(o.id),
-        );
-
-        const newProposal = {
-          id: `prop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
-          game,
-          owners: owners.length > 0 ? owners : ownershipByGame[game.id] ?? [CURRENT_USER],
-          proposedBy: CURRENT_USER,
-          note: note?.trim() || undefined,
-          voteCount: 0,
-          score: 0,
-          userVoted: false,
-        };
-
-        return {
-          ...session,
-          proposals: [...session.proposals, newProposal],
-        };
-      }),
-    );
-  };
-
-  const removeProposal = (sessionId: string, proposalId: string) => {
-    setSessions((prev) =>
-      prev.map((session) =>
-        session.id === sessionId
-          ? {
-              ...session,
-              proposals: session.proposals.filter((p) => p.id !== proposalId),
-            }
-          : session,
-      ),
-    );
-  };
-
-  const toggleVote = (sessionId: string, proposalId: string, requestedRank?: number) => {
-    setSessions((prev) =>
-      prev.map((session) => {
-        if (session.id !== sessionId || session.status === 'locked') return session;
-
-        const target = session.proposals.find((p) => p.id === proposalId);
-        if (!target) return session;
-
-        if (session.votingMode === 'ranked_top3') {
-          const rank = requestedRank ?? 1;
-          const isRemovingSameRank = target.userVoted && target.userRank === rank;
-
-          return {
-            ...session,
-            proposals: session.proposals.map((p) => {
-              let nextVoted = p.userVoted;
-              let nextRank = p.userRank;
-              let deltaVotes = 0;
-              let deltaScore = 0;
-
-              if (p.id === proposalId) {
-                if (p.userVoted && p.userRank) {
-                  deltaVotes -= 1;
-                  deltaScore -= RANK_POINTS[p.userRank] ?? 1;
-                }
-                if (isRemovingSameRank) {
-                  nextVoted = false;
-                  nextRank = undefined;
-                } else {
-                  nextVoted = true;
-                  nextRank = rank;
-                  deltaVotes += 1;
-                  deltaScore += RANK_POINTS[rank] ?? 1;
-                }
-              } else if (!isRemovingSameRank && p.userVoted && p.userRank === rank) {
-                nextVoted = false;
-                nextRank = undefined;
-                deltaVotes -= 1;
-                deltaScore -= RANK_POINTS[rank] ?? 1;
-              }
-
-              return {
-                ...p,
-                userVoted: nextVoted,
-                userRank: nextRank,
-                voteCount: Math.max(0, p.voteCount + deltaVotes),
-                score: Math.max(0, p.score + deltaScore),
-              };
-            }),
-          };
-        }
-
-        if (session.votingMode === 'single_choice') {
-          const alreadyVoted = target.userVoted;
-          return {
-            ...session,
-            proposals: session.proposals.map((p) => {
-              if (p.id === proposalId) {
-                return {
-                  ...p,
-                  userVoted: !alreadyVoted,
-                  voteCount: Math.max(0, p.voteCount + (alreadyVoted ? -1 : 1)),
-                  score: Math.max(0, p.score + (alreadyVoted ? -1 : 1)),
-                };
-              }
-              if (!alreadyVoted && p.userVoted) {
-                return {
-                  ...p,
-                  userVoted: false,
-                  voteCount: Math.max(0, p.voteCount - 1),
-                  score: Math.max(0, p.score - 1),
-                };
-              }
-              return p;
-            }),
-          };
-        }
-
-        const currentVotes = session.proposals.filter((p) => p.userVoted).length;
-        if (!target.userVoted && currentVotes >= session.maxVotesPerUser) {
-          return session;
-        }
-
-        return {
-          ...session,
-          proposals: session.proposals.map((p) => {
-            if (p.id !== proposalId) return p;
-            const nextVoted = !p.userVoted;
-            const delta = nextVoted ? 1 : -1;
-            return {
-              ...p,
-              userVoted: nextVoted,
-              voteCount: Math.max(0, p.voteCount + delta),
-              score: Math.max(0, p.score + delta),
-            };
-          }),
-        };
-      }),
-    );
-  };
-
-  const toggleSessionLock = (sessionId: string) => {
-    setSessions((prev) =>
-      prev.map((session) => {
-        if (session.id !== sessionId) return session;
-        return {
-          ...session,
-          status: session.status === 'locked' ? 'voting' : 'locked',
-        };
-      }),
-    );
-  };
-
-  const getSessionPool = (sessionId: string): SessionGameItem[] => {
-    const session = sessions.find((s) => s.id === sessionId);
-    if (!session) return [];
-
-    const goingIds = new Set(
-      session.participants.filter((p) => p.rsvp === 'going').map((p) => p.user.id),
-    );
-    const proposedGameIds = new Set(session.proposals.map((p) => p.game.id));
-
-    return MOCK_GAMES.map((game) => {
-      const goingOwners = (ownershipByGame[game.id] ?? []).filter((owner) =>
-        goingIds.has(owner.id),
+  const updateLibraryItem = useCallback(
+    async (
+      gameId: string,
+      patch: Partial<
+        Pick<LibraryGameItem, "status" | "personalRating" | "notes">
+      >,
+    ): Promise<void> => {
+      ensureAuthenticated();
+      await libraryApi.updateItem(gameId, {
+        status: patch.status,
+        personalRating: patch.personalRating ?? null,
+        notes: patch.notes ?? null,
+      });
+      setLibrary((prev) =>
+        prev.map((item) => (item.id === gameId ? { ...item, ...patch } : item)),
       );
-      return {
-        ...game,
-        owners: goingOwners,
-        isProposed: proposedGameIds.has(game.id),
-      };
-    }).filter((item) => item.owners.length > 0);
-  };
+    },
+    [ensureAuthenticated],
+  );
 
-  const addPlayLog = (input: CreatePlayLogInput): PlayLog => {
-    const game = MOCK_GAMES.find((g) => g.id === input.gameId) ?? MOCK_GAMES[0]!;
-    const newLog: PlayLog = {
-      id: `log-${Date.now().toString(36)}`,
-      sessionId: input.sessionId,
-      sessionTitle: input.sessionTitle,
-      groupId: input.groupId !== undefined ? input.groupId : activeGroup.id,
-      game,
-      playedAt: input.playedAt,
-      durationMinutes: input.durationMinutes,
-      notes: input.notes?.trim() || undefined,
-      players: input.players,
-    };
-    setPlayLogs((prev) => [newLog, ...prev]);
-    return newLog;
-  };
+  const removeLibraryItem = useCallback(
+    async (gameId: string): Promise<void> => {
+      ensureAuthenticated();
+      await libraryApi.removeItem(gameId);
+      setLibrary((prev) => prev.filter((item) => item.id !== gameId));
+    },
+    [ensureAuthenticated],
+  );
 
-  const openLogPlayModal: AppStateContextValue['openLogPlayModal'] = (prefill) => {
-    setLogPlayModalPrefill({ open: true, ...prefill });
-  };
+  // =========================================================================
+  // Session actions (100% real API)
+  // =========================================================================
 
-  const closeLogPlayModal = () => {
+  const upsertSession = useCallback((updated: GameSession) => {
+    setSessions((prev) => {
+      const exists = prev.some((s) => s.id === updated.id);
+      return exists
+        ? prev.map((s) => (s.id === updated.id ? updated : s))
+        : [updated, ...prev];
+    });
+  }, []);
+
+  const createSession = useCallback(
+    async (input: CreateSessionInput): Promise<GameSession> => {
+      ensureAuthenticated();
+      const { session } = await sessionsApi.create({
+        groupId: input.groupId,
+        title: input.title,
+        scheduledAt: input.scheduledAt,
+        location: input.location || null,
+        votingMode: input.votingMode,
+        maxVotesPerUser: input.maxVotesPerUser,
+      });
+      const mapped = mapSessionDetail(session);
+      upsertSession(mapped);
+      return mapped;
+    },
+    [ensureAuthenticated, upsertSession],
+  );
+
+  const joinSessionByToken = useCallback(
+    async (
+      inviteToken: string,
+      rsvp: RsvpStatus = "going",
+    ): Promise<GameSession> => {
+      ensureAuthenticated();
+      const { session } = await sessionsApi.joinByToken(inviteToken, rsvp);
+      const mapped = mapSessionDetail(session);
+      upsertSession(mapped);
+      return mapped;
+    },
+    [ensureAuthenticated, upsertSession],
+  );
+
+  const loadSessionDetail = useCallback(
+    async (sessionId: string): Promise<GameSession> => {
+      ensureAuthenticated();
+      const { session } = await sessionsApi.getDetail(sessionId);
+      const mapped = mapSessionDetail(session);
+      upsertSession(mapped);
+      return mapped;
+    },
+    [ensureAuthenticated, upsertSession],
+  );
+
+  const loadSessionPool = useCallback(
+    async (sessionId: string): Promise<SessionGameItem[]> => {
+      ensureAuthenticated();
+      const { items } = await sessionsApi.getPool(sessionId, {
+        onlyCompatible: false,
+        includeExpansions: true,
+      });
+      return items.map(mapPoolGame);
+    },
+    [ensureAuthenticated],
+  );
+
+  const updateRsvp = useCallback(
+    async (
+      sessionId: string,
+      _userId: string,
+      rsvp: RsvpStatus,
+    ): Promise<GameSession> => {
+      ensureAuthenticated();
+      const { session } = await sessionsApi.updateRsvp(sessionId, rsvp);
+      const mapped = mapSessionDetail(session);
+      upsertSession(mapped);
+      return mapped;
+    },
+    [ensureAuthenticated, upsertSession],
+  );
+
+  const proposeGame = useCallback(
+    async (
+      sessionId: string,
+      game: Game,
+      note?: string,
+    ): Promise<GameSession> => {
+      ensureAuthenticated();
+      const { session } = await sessionsApi.propose(sessionId, game.id, note);
+      const mapped = mapSessionDetail(session);
+      upsertSession(mapped);
+      return mapped;
+    },
+    [ensureAuthenticated, upsertSession],
+  );
+
+  const removeProposal = useCallback(
+    async (sessionId: string, proposalId: string): Promise<GameSession> => {
+      ensureAuthenticated();
+      const { session } = await sessionsApi.removeProposal(
+        sessionId,
+        proposalId,
+      );
+      const mapped = mapSessionDetail(session);
+      upsertSession(mapped);
+      return mapped;
+    },
+    [ensureAuthenticated, upsertSession],
+  );
+
+  const toggleVote = useCallback(
+    async (
+      sessionId: string,
+      proposalId: string,
+      requestedRank?: number,
+    ): Promise<GameSession> => {
+      ensureAuthenticated();
+      const targetSession = sessions.find((s) => s.id === sessionId);
+      const targetProposal = targetSession?.proposals.find(
+        (p) => p.id === proposalId,
+      );
+
+      const isRanked = targetSession?.votingMode === "ranked_top3";
+      const rank = requestedRank ?? 1;
+      const shouldRemove = isRanked
+        ? Boolean(
+            targetProposal?.userVoted && targetProposal?.userRank === rank,
+          )
+        : Boolean(targetProposal?.userVoted);
+
+      const { session } = shouldRemove
+        ? await sessionsApi.removeVote(sessionId, proposalId)
+        : await sessionsApi.castVote(sessionId, proposalId, rank);
+      const mapped = mapSessionDetail(session);
+      upsertSession(mapped);
+      return mapped;
+    },
+    [ensureAuthenticated, sessions, upsertSession],
+  );
+
+  const toggleSessionLock = useCallback(
+    async (sessionId: string): Promise<GameSession> => {
+      ensureAuthenticated();
+      const current = sessions.find((s) => s.id === sessionId);
+      const nextStatus = current?.status === "locked" ? "voting" : "locked";
+
+      const { session } = await sessionsApi.updateStatus(sessionId, nextStatus);
+      const mapped = mapSessionDetail(session);
+      upsertSession(mapped);
+      return mapped;
+    },
+    [ensureAuthenticated, sessions, upsertSession],
+  );
+
+  // =========================================================================
+  // Play log actions (100% real API)
+  // =========================================================================
+
+  const addPlayLog = useCallback(
+    async (input: CreatePlayLogInput): Promise<PlayLog> => {
+      ensureAuthenticated();
+      const resolvedGroupId =
+        input.groupId !== undefined ? input.groupId : (activeGroup?.id ?? null);
+      const { playLog } = await playLogsApi.create({
+        sessionId: input.sessionId ?? null,
+        groupId: resolvedGroupId,
+        gameId: input.gameId,
+        playedAt: input.playedAt,
+        durationMinutes: input.durationMinutes,
+        notes: input.notes?.trim() || null,
+        players: input.players.map((p) => ({
+          userId: p.user.id,
+          score: p.score ?? null,
+          isWinner: p.isWinner,
+        })),
+      });
+      const mapped = mapPlayLog(playLog);
+      setPlayLogs((prev) => [mapped, ...prev]);
+      if (resolvedGroupId) {
+        void refreshGroupStats(resolvedGroupId);
+      }
+      return mapped;
+    },
+    [ensureAuthenticated, activeGroup, refreshGroupStats],
+  );
+
+  const deletePlayLog = useCallback(
+    async (playLogId: string): Promise<void> => {
+      ensureAuthenticated();
+      await playLogsApi.remove(playLogId);
+      setPlayLogs((prev) => prev.filter((l) => l.id !== playLogId));
+      if (activeGroup?.id) {
+        void refreshGroupStats(activeGroup.id);
+      }
+    },
+    [ensureAuthenticated, activeGroup, refreshGroupStats],
+  );
+
+  const openLogPlayModal: AppStateContextValue["openLogPlayModal"] =
+    useCallback(
+      (prefill) => {
+        if (!isAuthenticated) {
+          openAuthModal("signin");
+          return;
+        }
+        setLogPlayModalPrefill({ open: true, ...prefill });
+      },
+      [isAuthenticated, openAuthModal],
+    );
+
+  const closeLogPlayModal = useCallback(() => {
     setLogPlayModalPrefill({ open: false });
-  };
+  }, []);
 
   return (
     <AppStateContext.Provider
       value={{
         currentUser,
+        isBootstrapping,
         users,
         groups,
-        activeGroupId: activeGroup.id,
+        activeGroupId: activeGroup?.id ?? null,
         activeGroup,
+        activeGroupStats,
         setActiveGroupId,
-        allGames: MOCK_GAMES,
+        allGames,
         library,
         sessions,
         playLogs,
         lastBggSyncLabel,
-        ownershipByGame,
+        refreshAll,
         createGroup,
         joinGroupByCode,
         regenerateInviteCode,
@@ -656,16 +807,21 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         getUserOwnedGameCount,
         getGroupGameCount,
         syncWithBgg,
+        searchBgg,
+        importBggGame,
         updateLibraryItem,
-        addGameToLibrary,
+        removeLibraryItem,
         createSession,
+        joinSessionByToken,
+        loadSessionDetail,
+        loadSessionPool,
         updateRsvp,
         proposeGame,
         removeProposal,
         toggleVote,
         toggleSessionLock,
-        getSessionPool,
         addPlayLog,
+        deletePlayLog,
         openLogPlayModal,
         logPlayModalPrefill,
         closeLogPlayModal,
@@ -679,7 +835,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 export function useAppState(): AppStateContextValue {
   const ctx = useContext(AppStateContext);
   if (!ctx) {
-    throw new Error('useAppState debe usarse dentro de AppStateProvider');
+    throw new Error("useAppState debe usarse dentro de AppStateProvider");
   }
   return ctx;
 }

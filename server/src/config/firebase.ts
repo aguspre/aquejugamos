@@ -71,8 +71,10 @@ function initFirebaseApp(): App | null {
     }
   }
 
-  // 3. Archivo local por defecto en server/serviceAccountKey.json
-  const defaultLocalAccount = resolveServiceAccountFromFile('./serviceAccountKey.json');
+  // 3. Archivo local por defecto en server/serviceAccountKey.json o raíz del repo
+  const defaultLocalAccount =
+    resolveServiceAccountFromFile('./serviceAccountKey.json') ??
+    resolveServiceAccountFromFile('../serviceAccountKey.json');
   if (defaultLocalAccount) {
     cachedApp = initializeApp({
       credential: cert(defaultLocalAccount),

@@ -66,14 +66,17 @@ export function GroupSwitcher({ variant }: GroupSwitcherProps) {
             <span className="text-[10px] font-bold uppercase tracking-wider text-ink-subtle">
               Grupo activo
             </span>
-            <span className="inline-flex items-center gap-1 rounded-full bg-forest-50 px-2 py-0.5 text-[10px] font-bold text-forest-700 num-tabular">
-              {activeGroup.members.length} amigos
-            </span>
+            {activeGroup && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-forest-50 px-2 py-0.5 text-[10px] font-bold text-forest-700 num-tabular">
+                {activeGroup.members.length}{' '}
+                {activeGroup.members.length === 1 ? 'miembro' : 'amigos'}
+              </span>
+            )}
           </div>
 
           <div className="flex items-center justify-between gap-2">
             <p className="text-sm font-bold text-ink truncate">
-              {activeGroup.name}
+              {activeGroup ? activeGroup.name : 'Creá o unite a un grupo'}
             </p>
             <ChevronDown
               className={`h-4 w-4 shrink-0 text-ink-muted transition-transform ${
@@ -83,14 +86,16 @@ export function GroupSwitcher({ variant }: GroupSwitcherProps) {
             />
           </div>
 
-          <div className="mt-2">
-            <OwnerAvatarStack
-              owners={activeGroup.members.map((m) => m.user)}
-              maxVisible={5}
-              size="sm"
-              showNames={false}
-            />
-          </div>
+          {activeGroup && (
+            <div className="mt-2">
+              <OwnerAvatarStack
+                owners={activeGroup.members.map((m) => m.user)}
+                maxVisible={5}
+                size="sm"
+                showNames={false}
+              />
+            </div>
+          )}
         </button>
       ) : (
         <button
@@ -98,10 +103,12 @@ export function GroupSwitcher({ variant }: GroupSwitcherProps) {
           onClick={() => setOpen((prev) => !prev)}
           aria-expanded={open}
           aria-haspopup="menu"
-          className="inline-flex min-h-8 max-w-[185px] items-center gap-1.5 rounded-full border border-border bg-surface/90 px-2.5 py-1 text-xs font-bold text-ink shadow-2xs transition hover:border-border-strong"
+          className="inline-flex min-h-8 max-w-[190px] items-center gap-1.5 rounded-full border border-border bg-surface/90 px-2.5 py-1 text-xs font-bold text-ink shadow-2xs transition hover:border-border-strong"
         >
           <Users className="h-3.5 w-3.5 shrink-0 text-forest-600" aria-hidden="true" />
-          <span className="truncate">{activeGroup.name}</span>
+          <span className="truncate">
+            {activeGroup ? activeGroup.name : 'Mis grupos'}
+          </span>
           <ChevronDown
             className={`h-3.5 w-3.5 shrink-0 text-ink-subtle transition-transform ${
               open ? 'rotate-180' : ''
@@ -124,40 +131,46 @@ export function GroupSwitcher({ variant }: GroupSwitcherProps) {
             Tus grupos ({groups.length})
           </div>
 
-          <div className="space-y-0.5 max-h-56 overflow-y-auto">
-            {groups.map((group) => {
-              const isSelected = group.id === activeGroup.id;
-              return (
-                <button
-                  key={group.id}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={isSelected}
-                  onClick={() => handleSelectGroup(group.id)}
-                  className={`flex w-full items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-left transition ${
-                    isSelected
-                      ? 'bg-forest-50 text-forest-900'
-                      : 'text-ink hover:bg-canvas-subtle'
-                  }`}
-                >
-                  <div className="min-w-0">
-                    <p className="text-xs font-bold truncate">{group.name}</p>
-                    <p className="text-[11px] text-ink-subtle num-tabular">
-                      {group.members.length}{' '}
-                      {group.members.length === 1 ? 'miembro' : 'miembros'} ·{' '}
-                      {group.inviteCode}
-                    </p>
-                  </div>
-                  {isSelected && (
-                    <Check
-                      className="h-4 w-4 shrink-0 text-forest-600"
-                      aria-hidden="true"
-                    />
-                  )}
-                </button>
-              );
-            })}
-          </div>
+          {groups.length === 0 ? (
+            <p className="px-2.5 py-2 text-xs text-ink-muted">
+              Todavía no formás parte de ningún grupo.
+            </p>
+          ) : (
+            <div className="space-y-0.5 max-h-56 overflow-y-auto">
+              {groups.map((group) => {
+                const isSelected = group.id === activeGroup?.id;
+                return (
+                  <button
+                    key={group.id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={isSelected}
+                    onClick={() => handleSelectGroup(group.id)}
+                    className={`flex w-full items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-left transition ${
+                      isSelected
+                        ? 'bg-forest-50 text-forest-900'
+                        : 'text-ink hover:bg-canvas-subtle'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold truncate">{group.name}</p>
+                      <p className="text-[11px] text-ink-subtle num-tabular">
+                        {group.members.length}{' '}
+                        {group.members.length === 1 ? 'miembro' : 'miembros'} ·{' '}
+                        {group.inviteCode}
+                      </p>
+                    </div>
+                    {isSelected && (
+                      <Check
+                        className="h-4 w-4 shrink-0 text-forest-600"
+                        aria-hidden="true"
+                      />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           <div className="my-1.5 border-t border-border" />
 

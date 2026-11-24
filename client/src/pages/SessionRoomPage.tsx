@@ -1,4 +1,5 @@
 import {
+  AlertCircle,
   ArrowLeft,
   CalendarDays,
   Check,
@@ -7,6 +8,7 @@ import {
   Dices,
   Library,
   Link2,
+  Loader2,
   Lock,
   MapPin,
   MessageSquareQuote,
@@ -18,8 +20,9 @@ import {
   Users,
   Vote,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { ApiError } from '../api/client';
 import { GameCard } from '../components/game/GameCard';
 import { GameDetailDrawer } from '../components/game/GameDetailDrawer';
 import { FilterChipBar } from '../components/ui/FilterChipBar';
@@ -27,7 +30,13 @@ import { OwnerAvatarStack } from '../components/ui/OwnerAvatarStack';
 import { PlayerCountBadge } from '../components/ui/PlayerCountBadge';
 import { WeightIndicator } from '../components/ui/WeightIndicator';
 import { useAppState } from '../context/AppStateContext';
-import type { Game, GameFilterState, RsvpStatus } from '../types/domain';
+import type {
+  Game,
+  GameFilterState,
+  GameSession,
+  RsvpStatus,
+  SessionGameItem,
+} from '../types/domain';
 import { DEFAULT_GAME_FILTERS, filterGames } from '../utils/filterGames';
 import { formatSessionDate } from '../utils/formatDate';
 
@@ -59,19 +68,26 @@ const RSVP_RING: Record<RsvpStatus, string> = {
 
 export function SessionRoomPage() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const {
     currentUser,
     sessions,
-    ownershipByGame,
+    loadSessionDetail,
+    loadSessionPool,
+    joinSessionByToken,
     updateRsvp,
     proposeGame,
     toggleVote,
     toggleSessionLock,
-    getSessionPool,
     openLogPlayModal,
   } = useAppState();
 
-  const session = sessions.find((s) => s.id === id) ?? sessions[0];
+  const [session, setSession] = useState<GameSession | null>(
+    () => sessions.find((s) => s.id === id) ?? null,
+  );
+  const [sessionPool, setSessionPool] = useState<SessionGameItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>('proposals');
   const [smartPlayerFilter, setSmartPlayerFilter] = useState(true);
   const [poolFilters, setPoolFilters] = useState<GameFilterState>(DEFAULT_GAME_FILTERS);
@@ -79,54 +95,41 @@ export function SessionRoomPage() {
   const [proposingGame, setProposingGame] = useState<Game | null>(null);
   const [proposalNote, setProposalNote] = useState('');
   const [copiedInvite, setCopiedInvite] = useState(false);
+  const [busyAction, setBusyAction] = useState(false);
 
-  if (!session) {
-    return (
-      <div className="rounded-2xl border border-border bg-surface p-8 text-center space-y-3">
-        <h1 className="font-[var(--font-display)] text-2xl font-bold text-ink">
-          Juntada no encontrada
-        </h1>
-        <Link
-          to="/sessions"
-          className="inline-flex items-center gap-1.5 text-sm font-bold text-forest-600 hover:underline"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Volver a Juntadas
-        </Link>
-      </div>
-    );
-  }
+  const fetchRoomData = useCallback(async () => {
+    if (!id) return;
+    setErrorMsg(null);
 
-  const goingParticipants = session.participants.filter((p) => p.rsvp === 'going');
-  const confirmedCount = goingParticipants.length;
-  const myParticipation = session.participants.find(
-    (p) => p.user.id === currentUser.id,
-  );
-  const myRsvp = myParticipation?.rsvp ?? 'going';
+    try {
+      const inviteToken = searchParams.get('invite');
+      let loadedSession: GameSession;
 
-  const isLocked = session.status === 'locked';
-  const isHost = session.host.id === currentUser.id;
+      if (inviteToken) {
+        loadedSession = await joinSessionByToken(inviteToken, 'going');
+        setSearchParams({}, { replace: true });
+      } else {
+        loadedSession = await loadSessionDetail(id);
+      }
 
-  const sortedProposals = useMemo(
-    () =>
-      [...session.proposals].sort(
-        (a, b) => b.score - a.score || b.voteCount - a.voteCount,
-      ),
-    [session.proposals],
-  );
+      setSession(loadedSession);
+      const pool = await loadSessionPool(loadedSession.id);
+      setSessionPool(pool);
+    } catch (err) {
+      setErrorMsg(
+        err instanceof ApiError
+          ? err.message
+          : 'No se pudo cargar la sala de la juntada.',
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [id, searchParams, setSearchParams, joinSessionByToken, loadSessionDetail, loadSessionPool]);
 
-  const maxScore = Math.max(1, ...sortedProposals.map((p) => p.score));
-  const topScore = sortedProposals[0]?.score ?? 0;
-  const winners =
-    topScore > 0 ? sortedProposals.filter((p) => p.score === topScore) : [];
-
-  const userVotesUsed = session.proposals.filter((p) => p.userVoted).length;
-  const votesRemaining = Math.max(0, session.maxVotesPerUser - userVotesUsed);
-
-  const sessionPool = useMemo(
-    () => getSessionPool(session.id),
-    [getSessionPool, session.id],
-  );
+  useEffect(() => {
+    setLoading(true);
+    void fetchRoomData();
+  }, [fetchRoomData]);
 
   const poolMechanics = useMemo(
     () =>
@@ -135,6 +138,12 @@ export function SessionRoomPage() {
       ),
     [sessionPool],
   );
+
+  const goingParticipants = useMemo(
+    () => session?.participants.filter((p) => p.rsvp === 'going') ?? [],
+    [session],
+  );
+  const confirmedCount = goingParticipants.length;
 
   const filteredPool = useMemo(() => {
     const baseFiltered = filterGames(sessionPool, poolFilters);
@@ -147,6 +156,74 @@ export function SessionRoomPage() {
     );
   }, [sessionPool, poolFilters, smartPlayerFilter, confirmedCount]);
 
+  if (loading && !session) {
+    return (
+      <div className="flex items-center justify-center py-20 text-ink-muted gap-2">
+        <Loader2 className="h-5 w-5 animate-spin text-forest-600" aria-hidden="true" />
+        <span className="text-sm font-semibold">Cargando sala de juntada…</span>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="rounded-2xl border border-border bg-surface p-8 text-center space-y-3">
+        <h1 className="font-[var(--font-display)] text-2xl font-bold text-ink">
+          {errorMsg ?? 'Juntada no encontrada'}
+        </h1>
+        <Link
+          to="/sessions"
+          className="inline-flex items-center gap-1.5 text-sm font-bold text-forest-600 hover:underline"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Volver a Juntadas
+        </Link>
+      </div>
+    );
+  }
+
+  const myParticipation = session.participants.find(
+    (p) => p.user.id === currentUser.id,
+  );
+  const myRsvp = myParticipation?.rsvp ?? 'going';
+
+  const isLocked = session.status === 'locked';
+  const isHost = session.host.id === currentUser.id;
+
+  const sortedProposals = [...session.proposals].sort(
+    (a, b) => b.score - a.score || b.voteCount - a.voteCount,
+  );
+
+  const maxScore = Math.max(1, ...sortedProposals.map((p) => p.score));
+  const topScore = sortedProposals[0]?.score ?? 0;
+  const winners =
+    topScore > 0 ? sortedProposals.filter((p) => p.score === topScore) : [];
+
+  const userVotesUsed = session.proposals.filter((p) => p.userVoted).length;
+  const votesRemaining = Math.max(0, session.maxVotesPerUser - userVotesUsed);
+
+  const runSessionAction = async (
+    action: () => Promise<GameSession>,
+    refreshPoolToo = false,
+  ) => {
+    setBusyAction(true);
+    setErrorMsg(null);
+    try {
+      const updated = await action();
+      setSession(updated);
+      if (refreshPoolToo) {
+        const pool = await loadSessionPool(updated.id);
+        setSessionPool(pool);
+      }
+    } catch (err) {
+      setErrorMsg(
+        err instanceof ApiError ? err.message : 'No se pudo completar la acción.',
+      );
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
   const handleCopyInvite = () => {
     const url = `${window.location.origin}/sessions/${session.id}?invite=${session.inviteToken}`;
     void navigator.clipboard?.writeText(url);
@@ -154,8 +231,8 @@ export function SessionRoomPage() {
     setTimeout(() => setCopiedInvite(false), 2000);
   };
 
-  const handleConfirmProposal = (game: Game, note?: string) => {
-    proposeGame(session.id, game, note);
+  const handleConfirmProposal = async (game: Game, note?: string) => {
+    await runSessionAction(() => proposeGame(session.id, game, note), true);
     setProposingGame(null);
     setProposalNote('');
   };
@@ -169,6 +246,11 @@ export function SessionRoomPage() {
       playerIds: goingParticipants.map((p) => p.user.id),
     });
   };
+
+  const selectedGameOwners = selectedGame
+    ? sessionPool.find((g) => g.id === selectedGame.id)?.owners ??
+      session.proposals.find((p) => p.game.id === selectedGame.id)?.owners
+    : undefined;
 
   return (
     <div className="space-y-6">
@@ -204,8 +286,9 @@ export function SessionRoomPage() {
           {isHost && (
             <button
               type="button"
-              onClick={() => toggleSessionLock(session.id)}
-              className={`inline-flex min-h-9 items-center gap-1.5 rounded-xl px-3.5 text-xs font-bold transition ${
+              disabled={busyAction}
+              onClick={() => void runSessionAction(() => toggleSessionLock(session.id))}
+              className={`inline-flex min-h-9 items-center gap-1.5 rounded-xl px-3.5 text-xs font-bold transition disabled:opacity-60 ${
                 isLocked
                   ? 'border border-border bg-surface text-ink hover:bg-canvas-subtle'
                   : 'bg-ink text-white hover:bg-forest-900'
@@ -226,6 +309,16 @@ export function SessionRoomPage() {
           )}
         </div>
       </div>
+
+      {errorMsg && (
+        <div
+          role="alert"
+          className="flex items-center gap-2 rounded-2xl border border-terracotta-200 bg-terracotta-50 px-4 py-3 text-xs font-semibold text-terracotta-700"
+        >
+          <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>{errorMsg}</span>
+        </div>
+      )}
 
       {/* Session Hero Card */}
       <section className="rounded-3xl border border-border bg-surface p-5 sm:p-6 shadow-[var(--shadow-card)] space-y-5">
@@ -270,7 +363,6 @@ export function SessionRoomPage() {
             </div>
           </div>
 
-          {/* Highlighted Confirmed Counter */}
           <div className="self-start flex items-center gap-3 rounded-2xl border border-forest-200 bg-forest-50/80 px-4 py-2.5">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-forest-600 text-white font-extrabold text-lg num-tabular">
               {confirmedCount}
@@ -323,7 +415,6 @@ export function SessionRoomPage() {
             })}
           </div>
 
-          {/* Interactive Current User RSVP */}
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-xs font-bold text-ink-subtle">Tu RSVP:</span>
             <div className="inline-flex rounded-xl border border-border bg-canvas p-0.5">
@@ -333,7 +424,13 @@ export function SessionRoomPage() {
                   <button
                     key={opt.id}
                     type="button"
-                    onClick={() => updateRsvp(session.id, currentUser.id, opt.id)}
+                    disabled={busyAction}
+                    onClick={() =>
+                      void runSessionAction(
+                        () => updateRsvp(session.id, currentUser.id, opt.id),
+                        true,
+                      )
+                    }
                     className={`min-h-8 rounded-lg px-2.5 text-xs font-bold transition border ${
                       active
                         ? opt.activeClass
@@ -349,7 +446,7 @@ export function SessionRoomPage() {
         </div>
       </section>
 
-      {/* Main 2-Tab Navigation */}
+      {/* 2-Tab Switch */}
       <div
         role="tablist"
         aria-label="Secciones de la juntada"
@@ -404,12 +501,9 @@ export function SessionRoomPage() {
         </button>
       </div>
 
-      {/* ==================================================================== */}
-      {/* TAB 1: PROPUESTAS Y VOTACIÓN                                         */}
-      {/* ==================================================================== */}
+      {/* TAB 1: PROPOSALS & VOTING */}
       {activeTab === 'proposals' && (
         <section className="space-y-4">
-          {/* Status / Voting Quota Banner */}
           {isLocked && winners.length > 0 ? (
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border border-ochre-500/40 bg-gradient-to-r from-ochre-50 via-surface to-forest-50 p-4 sm:p-5 shadow-xs">
               <div className="flex items-start gap-3">
@@ -483,7 +577,6 @@ export function SessionRoomPage() {
             </div>
           )}
 
-          {/* Proposals List */}
           {sortedProposals.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-border-strong bg-surface/70 px-6 py-12 text-center space-y-3">
               <p className="font-[var(--font-display)] text-xl font-bold text-ink">
@@ -505,8 +598,7 @@ export function SessionRoomPage() {
           ) : (
             <div className="space-y-3">
               {sortedProposals.map((proposal, index) => {
-                const isWinner =
-                  topScore > 0 && proposal.score === topScore;
+                const isWinner = topScore > 0 && proposal.score === topScore;
                 const progressPct = Math.round((proposal.score / maxScore) * 100);
                 const cannotAddVote =
                   !proposal.userVoted &&
@@ -525,7 +617,6 @@ export function SessionRoomPage() {
                     }`}
                   >
                     <div className="flex flex-col sm:flex-row gap-4">
-                      {/* Cover + Rank Pill */}
                       <div className="relative sm:w-40 aspect-[16/10] sm:aspect-[4/3] shrink-0 overflow-hidden rounded-xl bg-canvas-subtle">
                         <img
                           src={proposal.game.imageUrl}
@@ -546,7 +637,6 @@ export function SessionRoomPage() {
                         </span>
                       </div>
 
-                      {/* Middle Info */}
                       <div className="flex-1 min-w-0 space-y-2.5">
                         <div className="flex flex-wrap items-start justify-between gap-2">
                           <div>
@@ -565,7 +655,6 @@ export function SessionRoomPage() {
                             </p>
                           </div>
 
-                          {/* Score Pill */}
                           <div className="text-right">
                             <span className="inline-flex items-baseline gap-1 rounded-xl bg-canvas-subtle px-3 py-1 num-tabular">
                               <span className="text-lg font-extrabold text-ink">
@@ -582,7 +671,6 @@ export function SessionRoomPage() {
                           </div>
                         </div>
 
-                        {/* Metadata Pills */}
                         <div className="flex flex-wrap items-center gap-1.5">
                           <PlayerCountBadge
                             minPlayers={proposal.game.minPlayers}
@@ -597,7 +685,6 @@ export function SessionRoomPage() {
                           <WeightIndicator weight={proposal.game.weight} />
                         </div>
 
-                        {/* Optional Proposal Note */}
                         {proposal.note && (
                           <div className="flex items-start gap-2 rounded-xl bg-canvas px-3 py-2 text-xs text-ink-muted border border-border/70">
                             <MessageSquareQuote
@@ -608,7 +695,6 @@ export function SessionRoomPage() {
                           </div>
                         )}
 
-                        {/* Progress Bar */}
                         <div
                           className="h-2 w-full overflow-hidden rounded-full bg-canvas-subtle"
                           aria-hidden="true"
@@ -617,11 +703,12 @@ export function SessionRoomPage() {
                             className={`h-full rounded-full transition-all duration-300 ${
                               isWinner ? 'bg-terracotta-500' : 'bg-forest-500'
                             }`}
-                            style={{ width: `${proposal.score > 0 ? Math.max(8, progressPct) : 0}%` }}
+                            style={{
+                              width: `${proposal.score > 0 ? Math.max(8, progressPct) : 0}%`,
+                            }}
                           />
                         </div>
 
-                        {/* Footer: Owners + Vote Action */}
                         <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                           <OwnerAvatarStack owners={proposal.owners} size="sm" />
 
@@ -646,8 +733,11 @@ export function SessionRoomPage() {
                                   <button
                                     key={rank}
                                     type="button"
+                                    disabled={busyAction}
                                     onClick={() =>
-                                      toggleVote(session.id, proposal.id, rank)
+                                      void runSessionAction(() =>
+                                        toggleVote(session.id, proposal.id, rank),
+                                      )
                                     }
                                     className={`inline-flex min-h-9 min-w-11 items-center justify-center rounded-xl border px-2.5 text-xs font-extrabold num-tabular transition ${
                                       isSelected
@@ -663,8 +753,12 @@ export function SessionRoomPage() {
                           ) : (
                             <button
                               type="button"
-                              disabled={cannotAddVote}
-                              onClick={() => toggleVote(session.id, proposal.id)}
+                              disabled={busyAction || cannotAddVote}
+                              onClick={() =>
+                                void runSessionAction(() =>
+                                  toggleVote(session.id, proposal.id),
+                                )
+                              }
                               className={`inline-flex min-h-10 items-center gap-2 rounded-xl px-4 text-xs font-bold transition ${
                                 proposal.userVoted
                                   ? 'border border-terracotta-200 bg-terracotta-50 text-terracotta-700 hover:bg-terracotta-100'
@@ -675,7 +769,9 @@ export function SessionRoomPage() {
                             >
                               <ThumbsUp
                                 className={`h-3.5 w-3.5 ${
-                                  proposal.userVoted ? 'fill-terracotta-500 text-terracotta-500' : ''
+                                  proposal.userVoted
+                                    ? 'fill-terracotta-500 text-terracotta-500'
+                                    : ''
                                 }`}
                                 aria-hidden="true"
                               />
@@ -697,12 +793,9 @@ export function SessionRoomPage() {
         </section>
       )}
 
-      {/* ==================================================================== */}
-      {/* TAB 2: LUDOTECA COMBINADA DEL GRUPO (POOL DE ASISTENTES)             */}
-      {/* ==================================================================== */}
+      {/* TAB 2: COMBINED POOL */}
       {activeTab === 'pool' && (
         <section className="space-y-4">
-          {/* Smart Compatibility Banner (ON by default) */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-forest-200 bg-forest-50/75 px-4 py-3.5">
             <div className="flex items-start gap-2.5">
               <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-forest-600 text-white">
@@ -766,11 +859,12 @@ export function SessionRoomPage() {
           {filteredPool.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-border-strong bg-surface/70 px-6 py-12 text-center space-y-2">
               <p className="font-[var(--font-display)] text-lg font-bold text-ink">
-                No hay juegos compatibles con esos filtros
+                No hay juegos compatibles en el pool
               </p>
               <p className="text-sm text-ink-muted">
-                Probá desactivar el filtro de {confirmedCount} jugadores o limpiar las
-                mecánicas.
+                {sessionPool.length === 0
+                  ? 'Sincronizá tu colección de BGG en Mi Ludoteca para que aparezcan juegos aquí.'
+                  : `Probá desactivar el filtro de ${confirmedCount} jugadores o limpiar las mecánicas.`}
               </p>
             </div>
           ) : (
@@ -800,7 +894,7 @@ export function SessionRoomPage() {
                     ) : (
                       <button
                         type="button"
-                        disabled={isLocked}
+                        disabled={isLocked || busyAction}
                         onClick={() => {
                           setProposingGame(item);
                           setProposalNote('');
@@ -881,9 +975,11 @@ export function SessionRoomPage() {
               </button>
               <button
                 type="button"
-                onClick={() => handleConfirmProposal(proposingGame, proposalNote)}
-                className="min-h-10 rounded-xl bg-forest-600 px-4 text-xs font-bold text-white hover:bg-forest-700"
+                disabled={busyAction}
+                onClick={() => void handleConfirmProposal(proposingGame, proposalNote)}
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-forest-600 px-4 text-xs font-bold text-white hover:bg-forest-700 disabled:opacity-70"
               >
+                {busyAction && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                 Confirmar propuesta
               </button>
             </div>
@@ -894,7 +990,7 @@ export function SessionRoomPage() {
       {/* Detail Drawer */}
       <GameDetailDrawer
         game={selectedGame}
-        owners={selectedGame ? ownershipByGame[selectedGame.id] : undefined}
+        owners={selectedGameOwners}
         isProposed={
           selectedGame
             ? session.proposals.some((p) => p.game.id === selectedGame.id)

@@ -1,7 +1,9 @@
 import {
+  AlertCircle,
   Calendar,
   CheckCircle2,
   ListOrdered,
+  Loader2,
   MapPin,
   Sparkles,
   Users,
@@ -9,6 +11,7 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
+import { ApiError } from '../../api/client';
 import {
   useAppState,
   type CreateSessionInput,
@@ -18,7 +21,7 @@ import type { VotingMode } from '../../types/domain';
 interface CreateSessionModalProps {
   open: boolean;
   onClose: () => void;
-  onCreate: (input: CreateSessionInput) => void;
+  onCreate: (input: CreateSessionInput) => Promise<void>;
 }
 
 const VOTING_MODES: {
@@ -47,6 +50,13 @@ const VOTING_MODES: {
   },
 ];
 
+function defaultDateTimeLocal(): string {
+  const d = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+  d.setHours(21, 0, 0, 0);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export function CreateSessionModal({
   open,
   onClose,
@@ -54,17 +64,22 @@ export function CreateSessionModal({
 }: CreateSessionModalProps) {
   const { groups, activeGroup } = useAppState();
   const [title, setTitle] = useState('');
-  const [dateTime, setDateTime] = useState('2026-12-04T21:00');
+  const [dateTime, setDateTime] = useState(defaultDateTimeLocal);
   const [location, setLocation] = useState('');
-  const [selectedGroupId, setSelectedGroupId] = useState<string>(activeGroup.id);
+  const [selectedGroupId, setSelectedGroupId] = useState<string>(
+    activeGroup?.id ?? '__direct__',
+  );
   const [votingMode, setVotingMode] = useState<VotingMode>('multi_vote');
   const [maxVotesPerUser, setMaxVotesPerUser] = useState(3);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
-      setSelectedGroupId(activeGroup.id);
+      setSelectedGroupId(activeGroup?.id ?? '__direct__');
+      setError(null);
     }
-  }, [open, activeGroup.id]);
+  }, [open, activeGroup?.id]);
 
   useEffect(() => {
     if (!open) return;
@@ -77,7 +92,7 @@ export function CreateSessionModal({
 
   if (!open) return null;
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
 
@@ -86,19 +101,27 @@ export function CreateSessionModal({
         ? null
         : groups.find((g) => g.id === selectedGroupId) ?? null;
 
-    onCreate({
-      title: title.trim(),
-      scheduledAt: new Date(dateTime).toISOString(),
-      location: location.trim() || 'Lugar a confirmar',
-      groupId: chosenGroup?.id ?? null,
-      groupName: chosenGroup?.name ?? 'Invitación abierta por link',
-      votingMode,
-      maxVotesPerUser,
-    });
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onCreate({
+        title: title.trim(),
+        scheduledAt: new Date(dateTime).toISOString(),
+        location: location.trim() || 'Lugar a confirmar',
+        groupId: chosenGroup?.id ?? null,
+        groupName: chosenGroup?.name ?? 'Invitación abierta por link',
+        votingMode,
+        maxVotesPerUser,
+      });
 
-    setTitle('');
-    setLocation('');
-    onClose();
+      setTitle('');
+      setLocation('');
+      onClose();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'No se pudo crear la juntada');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -140,7 +163,20 @@ export function CreateSessionModal({
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 space-y-5">
+        <form
+          onSubmit={(e) => void handleSubmit(e)}
+          className="flex-1 overflow-y-auto p-5 space-y-5"
+        >
+          {error && (
+            <div
+              role="alert"
+              className="flex items-center gap-2 rounded-xl border border-terracotta-200 bg-terracotta-50 px-3 py-2 text-xs font-semibold text-terracotta-700"
+            >
+              <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>{error}</span>
+            </div>
+          )}
+
           {/* Title */}
           <div className="space-y-1.5">
             <label
@@ -153,6 +189,7 @@ export function CreateSessionModal({
               id="session-title-input"
               type="text"
               required
+              minLength={2}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Ej. Viernes de Euros + Empanadas"
@@ -328,8 +365,10 @@ export function CreateSessionModal({
             </button>
             <button
               type="submit"
-              className="min-h-11 rounded-xl bg-forest-600 px-5 text-sm font-bold text-white shadow-xs hover:bg-forest-700 transition"
+              disabled={submitting}
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-forest-600 px-5 text-sm font-bold text-white shadow-xs hover:bg-forest-700 disabled:opacity-70 transition"
             >
+              {submitting && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
               Crear juntada y abrir sala
             </button>
           </div>

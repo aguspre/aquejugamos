@@ -172,7 +172,6 @@ export function AuthModal() {
   return (
     <dialog
       ref={dialogRef}
-      // @ts-expect-error `closedby` es estándar HTML moderno con fallback en useEffect
       closedby="any"
       aria-labelledby="auth-dialog-title"
       onClose={() => {

@@ -24,6 +24,14 @@ const TIER_STYLES = {
 } as const;
 
 export function WeightIndicator({ weight, variant = 'pill' }: WeightIndicatorProps) {
+  if (!weight || weight <= 0) {
+    return (
+      <span className="inline-flex items-center rounded-full border border-border bg-canvas-subtle px-2 py-0.5 text-[11px] font-medium text-ink-subtle">
+        Sin peso
+      </span>
+    );
+  }
+
   const clamped = Math.max(1, Math.min(5, weight));
   const tier = getWeightTier(clamped);
   const label = getWeightLabel(tier);
