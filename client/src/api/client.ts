@@ -91,7 +91,9 @@ export async function apiRequest<T>(
     throw new ApiError(
       0,
       'NETWORK_ERROR',
-      'No se pudo conectar con el servidor. Verificá que el backend esté corriendo en el puerto 3001.',
+      API_BASE
+        ? 'No se pudo conectar con el servidor. Verificá tu conexión o intentá nuevamente en unos segundos.'
+        : 'No se pudo conectar con el servidor. Verificá que el backend esté corriendo en el puerto 3001.',
     );
   }
 

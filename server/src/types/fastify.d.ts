@@ -1,4 +1,5 @@
 import '@fastify/jwt';
+import type { User } from '@prisma/client';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 declare module '@fastify/jwt' {
@@ -27,5 +28,9 @@ declare module '@fastify/jwt' {
 declare module 'fastify' {
   interface FastifyInstance {
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  }
+
+  interface FastifyRequest {
+    syncedUser?: User;
   }
 }

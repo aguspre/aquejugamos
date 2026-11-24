@@ -38,23 +38,67 @@ export function toPublicUser(user: User): PublicUser {
   };
 }
 
+const FIREBASE_USER_CACHE_TTL_MS = 5 * 60 * 1000;
+const FIREBASE_USER_CACHE_MAX_SIZE = 5000;
+
+interface CachedFirebaseUser {
+  user: User;
+  expiresAt: number;
+}
+
+const firebaseUserCache = new Map<string, CachedFirebaseUser>();
+
+function setCachedFirebaseUser(user: User): User {
+  if (!user.firebaseUid) return user;
+  if (firebaseUserCache.size >= FIREBASE_USER_CACHE_MAX_SIZE) {
+    const oldestKey = firebaseUserCache.keys().next().value;
+    if (oldestKey) {
+      firebaseUserCache.delete(oldestKey);
+    }
+  }
+  firebaseUserCache.set(user.firebaseUid, {
+    user,
+    expiresAt: Date.now() + FIREBASE_USER_CACHE_TTL_MS,
+  });
+  return user;
+}
+
+export function invalidateFirebaseUserCacheByUserId(userId: string): void {
+  for (const [uid, entry] of firebaseUserCache.entries()) {
+    if (entry.user.id === userId) {
+      firebaseUserCache.delete(uid);
+    }
+  }
+}
+
 export async function syncFirebaseUser(decoded: DecodedIdToken): Promise<User> {
+  const picture =
+    typeof decoded.picture === 'string' && decoded.picture.trim()
+      ? decoded.picture.trim()
+      : null;
+
+  const cached = firebaseUserCache.get(decoded.uid);
+  if (cached && cached.expiresAt > Date.now()) {
+    if (cached.user.avatarUrl || !picture) {
+      return cached.user;
+    }
+  } else if (cached) {
+    firebaseUserCache.delete(decoded.uid);
+  }
+
   const existingByUid = await prisma.user.findUnique({
     where: { firebaseUid: decoded.uid },
   });
 
-  const picture = typeof decoded.picture === 'string' && decoded.picture.trim()
-    ? decoded.picture.trim()
-    : null;
-
   if (existingByUid) {
     if (!existingByUid.avatarUrl && picture) {
-      return prisma.user.update({
+      const updated = await prisma.user.update({
         where: { id: existingByUid.id },
         data: { avatarUrl: picture },
       });
+      return setCachedFirebaseUser(updated);
     }
-    return existingByUid;
+    return setCachedFirebaseUser(existingByUid);
   }
 
   const rawEmail = decoded.email?.trim().toLowerCase();
@@ -75,17 +119,18 @@ export async function syncFirebaseUser(decoded: DecodedIdToken): Promise<User> {
   });
 
   if (existingByEmail) {
-    return prisma.user.update({
+    const updated = await prisma.user.update({
       where: { id: existingByEmail.id },
       data: {
         firebaseUid: decoded.uid,
         avatarUrl: existingByEmail.avatarUrl ?? picture,
       },
     });
+    return setCachedFirebaseUser(updated);
   }
 
   try {
-    return await prisma.user.create({
+    const created = await prisma.user.create({
       data: {
         email: rawEmail,
         firebaseUid: decoded.uid,
@@ -93,6 +138,7 @@ export async function syncFirebaseUser(decoded: DecodedIdToken): Promise<User> {
         avatarUrl: picture,
       },
     });
+    return setCachedFirebaseUser(created);
   } catch (error) {
     // Manejo seguro de race condition cuando llegan requests concurrentes en el primer login
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -102,12 +148,13 @@ export async function syncFirebaseUser(decoded: DecodedIdToken): Promise<User> {
 
       if (recovered) {
         if (!recovered.firebaseUid) {
-          return prisma.user.update({
+          const linked = await prisma.user.update({
             where: { id: recovered.id },
             data: { firebaseUid: decoded.uid },
           });
+          return setCachedFirebaseUser(linked);
         }
-        return recovered;
+        return setCachedFirebaseUser(recovered);
       }
     }
     throw error;
@@ -261,6 +308,7 @@ export async function updateUserProfile(
     },
   });
 
+  setCachedFirebaseUser(user);
   return toPublicUser(user);
 }
 

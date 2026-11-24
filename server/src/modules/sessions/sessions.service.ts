@@ -82,6 +82,73 @@ export interface SessionAccessScope {
   guestSessionId?: string;
 }
 
+export interface ProposalVoteSummary {
+  id: string;
+  status: ProposalStatus;
+  voteCount: number;
+  score: number;
+  userVoted: boolean;
+  userRank: number | null;
+}
+
+export interface SessionVotesSnapshot {
+  sessionId: string;
+  userVotesUsed: number;
+  votesRemaining: number;
+  lockedVotesCount: number;
+  lockedRanks: number[];
+  proposals: ProposalVoteSummary[];
+}
+
+interface ProposalVotesRow {
+  id: string;
+  status: ProposalStatus;
+  acceptedAt: Date | null;
+  createdAt: Date;
+  votes: { userId: string; rank: number }[];
+}
+
+function buildVotesSnapshot(
+  sessionId: string,
+  votingMode: VotingMode,
+  maxVotesPerUser: number,
+  userId: string,
+  proposals: ProposalVotesRow[],
+): SessionVotesSnapshot {
+  const scored = proposals.map((p) => ({
+    id: p.id,
+    status: p.status,
+    acceptedAt: p.acceptedAt,
+    createdAt: p.createdAt,
+    ...scoreProposalVotes(p.votes, votingMode, userId),
+  }));
+
+  const accepted = sortAcceptedProposals(
+    scored.filter((p) => p.status === ProposalStatus.accepted),
+  );
+  const open = sortScoredProposals(
+    scored.filter((p) => p.status === ProposalStatus.open),
+  );
+  const ordered = [...accepted, ...open];
+  const quota = computeUserVoteQuota(ordered, votingMode, maxVotesPerUser);
+
+  return {
+    sessionId,
+    userVotesUsed: quota.userVotesUsed,
+    votesRemaining: quota.votesRemaining,
+    lockedVotesCount: quota.lockedVotesCount,
+    lockedRanks: quota.lockedRanks,
+    proposals: ordered.map((p) => ({
+      id: p.id,
+      status: p.status,
+      voteCount: p.voteCount,
+      score: p.score,
+      userVoted: p.userVoted,
+      userRank: p.userRank,
+    })),
+  };
+}
+
 export async function assertSessionAccess(
   userId: string,
   sessionId: string,
@@ -126,6 +193,7 @@ export async function assertSessionAccess(
   return {
     session,
     isHost,
+    isParticipant,
     isGroupAdmin: !scope?.isGuest && session.group?.members[0]?.role === GroupRole.admin,
   };
 }
@@ -148,17 +216,10 @@ export async function listUserSessions(
       await assertGroupMember(userId, query.groupId);
     }
 
-    const userGroupIds = (
-      await prisma.groupMember.findMany({
-        where: { userId },
-        select: { groupId: true },
-      })
-    ).map((g) => g.groupId);
-
     accessOr = [
       { hostId: userId },
       { participants: { some: { userId } } },
-      ...(userGroupIds.length > 0 ? [{ groupId: { in: userGroupIds } }] : []),
+      { group: { members: { some: { userId } } } },
     ];
   }
 
@@ -343,12 +404,19 @@ export async function getSessionDetail(
   sessionId: string,
   scope?: SessionAccessScope,
 ) {
-  const { isHost, isGroupAdmin } = await assertSessionAccess(userId, sessionId, scope);
-
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
     include: {
-      group: { select: { id: true, name: true } },
+      group: {
+        select: {
+          id: true,
+          name: true,
+          members: {
+            where: { userId },
+            select: { role: true },
+          },
+        },
+      },
       host: { select: USER_SUMMARY_SELECT },
       participants: {
         include: { user: { select: USER_SUMMARY_SELECT } },
@@ -368,6 +436,22 @@ export async function getSessionDetail(
   if (!session) {
     throw notFound('Juntada no encontrada', 'SESSION_NOT_FOUND');
   }
+
+  const isHost = session.hostId === userId;
+  const isParticipant = session.participants.some((p) => p.userId === userId);
+  const isGroupMember = (session.group?.members.length ?? 0) > 0;
+  const isInvitedGuest = Boolean(
+    scope?.isGuest &&
+      ((scope.guestGroupId && session.groupId === scope.guestGroupId) ||
+        (scope.guestSessionId && session.id === scope.guestSessionId)),
+  );
+
+  if (!isHost && !isParticipant && !isGroupMember && !isInvitedGuest) {
+    throw forbidden('No tenés acceso a esta juntada', 'SESSION_ACCESS_DENIED');
+  }
+
+  const isGroupAdmin =
+    !scope?.isGuest && session.group?.members[0]?.role === GroupRole.admin;
 
   const goingIds = session.participants
     .filter((p) => p.rsvp === RsvpStatus.going)
@@ -781,8 +865,20 @@ export async function castVote(
   proposalId: string,
   rank: number,
   scope?: SessionAccessScope,
-) {
-  const { session } = await assertSessionAccess(userId, sessionId, scope);
+): Promise<SessionVotesSnapshot> {
+  const [{ session, isParticipant }, proposals] = await Promise.all([
+    assertSessionAccess(userId, sessionId, scope),
+    prisma.sessionProposal.findMany({
+      where: { sessionId },
+      select: {
+        id: true,
+        status: true,
+        acceptedAt: true,
+        createdAt: true,
+        votes: { select: { userId: true, rank: true } },
+      },
+    }),
+  ]);
 
   if (session.status !== SessionStatus.voting && session.status !== SessionStatus.planning) {
     throw badRequest(
@@ -792,135 +888,241 @@ export async function castVote(
     );
   }
 
-  await prisma.$transaction(async (tx) => {
-    if (scope?.isGuest) {
-      await tx.sessionParticipant.upsert({
+  const targetProposal = proposals.find((p) => p.id === proposalId);
+
+  if (!targetProposal) {
+    throw notFound('Propuesta no encontrada en esta juntada', 'PROPOSAL_NOT_FOUND');
+  }
+
+  if (targetProposal.status === ProposalStatus.accepted) {
+    throw badRequest(
+      'Este juego ya está confirmado para la mesa y no admite cambios de voto',
+      undefined,
+      'PROPOSAL_ALREADY_ACCEPTED',
+    );
+  }
+
+  const needsGuestParticipant = Boolean(scope?.isGuest && !isParticipant);
+
+  if (session.votingMode === VotingMode.ranked_top3) {
+    if (rank < 1 || rank > 3) {
+      throw badRequest('En modo Top 3 el rank debe ser 1, 2 o 3', undefined, 'INVALID_RANK');
+    }
+
+    const hasLockedRankVote = proposals.some(
+      (p) =>
+        p.status === ProposalStatus.accepted &&
+        p.votes.some((v) => v.userId === userId && v.rank === rank),
+    );
+
+    if (hasLockedRankVote) {
+      throw badRequest(
+        `Tu puesto ${rank}° ya se usó en un juego confirmado para la mesa`,
+        { rank },
+        'RANK_LOCKED_IN_ACCEPTED',
+      );
+    }
+
+    const otherOpenWithSameRank = proposals.filter(
+      (p) =>
+        p.id !== proposalId &&
+        p.status === ProposalStatus.open &&
+        p.votes.some((v) => v.userId === userId && v.rank === rank),
+    );
+
+    const ops: Prisma.PrismaPromise<unknown>[] = [];
+    if (needsGuestParticipant) {
+      ops.push(
+        prisma.sessionParticipant.upsert({
+          where: { sessionId_userId: { sessionId, userId } },
+          update: {},
+          create: { sessionId, userId, rsvp: RsvpStatus.going },
+        }),
+      );
+    }
+    if (otherOpenWithSameRank.length > 0) {
+      ops.push(
+        prisma.sessionVote.deleteMany({
+          where: {
+            userId,
+            rank,
+            proposalId: { in: otherOpenWithSameRank.map((p) => p.id) },
+          },
+        }),
+      );
+    }
+    ops.push(
+      prisma.sessionVote.upsert({
+        where: { proposalId_userId: { proposalId, userId } },
+        update: { rank },
+        create: { proposalId, userId, rank },
+      }),
+    );
+
+    if (ops.length === 1) {
+      await ops[0];
+    } else {
+      await prisma.$transaction(ops);
+    }
+
+    for (const p of otherOpenWithSameRank) {
+      p.votes = p.votes.filter((v) => !(v.userId === userId && v.rank === rank));
+    }
+    const existingVote = targetProposal.votes.find((v) => v.userId === userId);
+    if (existingVote) {
+      existingVote.rank = rank;
+    } else {
+      targetProposal.votes.push({ userId, rank });
+    }
+
+    return buildVotesSnapshot(
+      sessionId,
+      session.votingMode,
+      session.maxVotesPerUser,
+      userId,
+      proposals,
+    );
+  }
+
+  if (session.votingMode === VotingMode.single_choice) {
+    const hasLockedVote = proposals.some(
+      (p) =>
+        p.status === ProposalStatus.accepted &&
+        p.votes.some((v) => v.userId === userId),
+    );
+
+    if (hasLockedVote) {
+      throw badRequest(
+        'Tu voto ya se usó en un juego confirmado para la mesa',
+        undefined,
+        'VOTE_LOCKED_IN_ACCEPTED',
+      );
+    }
+
+    const otherOpenWithUserVote = proposals.filter(
+      (p) =>
+        p.id !== proposalId &&
+        p.status === ProposalStatus.open &&
+        p.votes.some((v) => v.userId === userId),
+    );
+
+    const ops: Prisma.PrismaPromise<unknown>[] = [];
+    if (needsGuestParticipant) {
+      ops.push(
+        prisma.sessionParticipant.upsert({
+          where: { sessionId_userId: { sessionId, userId } },
+          update: {},
+          create: { sessionId, userId, rsvp: RsvpStatus.going },
+        }),
+      );
+    }
+    if (otherOpenWithUserVote.length > 0) {
+      ops.push(
+        prisma.sessionVote.deleteMany({
+          where: {
+            userId,
+            proposalId: { in: otherOpenWithUserVote.map((p) => p.id) },
+          },
+        }),
+      );
+    }
+    ops.push(
+      prisma.sessionVote.upsert({
+        where: { proposalId_userId: { proposalId, userId } },
+        update: { rank: 1 },
+        create: { proposalId, userId, rank: 1 },
+      }),
+    );
+
+    if (ops.length === 1) {
+      await ops[0];
+    } else {
+      await prisma.$transaction(ops);
+    }
+
+    for (const p of otherOpenWithUserVote) {
+      p.votes = p.votes.filter((v) => v.userId !== userId);
+    }
+    const existingVote = targetProposal.votes.find((v) => v.userId === userId);
+    if (existingVote) {
+      existingVote.rank = 1;
+    } else {
+      targetProposal.votes.push({ userId, rank: 1 });
+    }
+
+    return buildVotesSnapshot(
+      sessionId,
+      session.votingMode,
+      session.maxVotesPerUser,
+      userId,
+      proposals,
+    );
+  }
+
+  // multi_vote: votes on accepted proposals remain consumed and count toward maxVotesPerUser
+  const alreadyVotedTarget = targetProposal.votes.some((v) => v.userId === userId);
+  if (alreadyVotedTarget) {
+    if (needsGuestParticipant) {
+      await prisma.sessionParticipant.upsert({
         where: { sessionId_userId: { sessionId, userId } },
         update: {},
         create: { sessionId, userId, rsvp: RsvpStatus.going },
       });
     }
+    return buildVotesSnapshot(
+      sessionId,
+      session.votingMode,
+      session.maxVotesPerUser,
+      userId,
+      proposals,
+    );
+  }
 
-    const proposal = await tx.sessionProposal.findFirst({
-      where: { id: proposalId, sessionId },
-      select: { id: true, status: true },
-    });
+  const currentVoteCount = proposals.reduce(
+    (sum, p) => sum + (p.votes.some((v) => v.userId === userId) ? 1 : 0),
+    0,
+  );
 
-    if (!proposal) {
-      throw notFound('Propuesta no encontrada en esta juntada', 'PROPOSAL_NOT_FOUND');
-    }
+  if (currentVoteCount >= session.maxVotesPerUser) {
+    throw badRequest(
+      `Ya usaste el máximo de ${session.maxVotesPerUser} votos en esta juntada`,
+      { maxVotesPerUser: session.maxVotesPerUser },
+      'MAX_VOTES_REACHED',
+    );
+  }
 
-    if (proposal.status === ProposalStatus.accepted) {
-      throw badRequest(
-        'Este juego ya está confirmado para la mesa y no admite cambios de voto',
-        undefined,
-        'PROPOSAL_ALREADY_ACCEPTED',
-      );
-    }
-
-    if (session.votingMode === VotingMode.ranked_top3) {
-      if (rank < 1 || rank > 3) {
-        throw badRequest('En modo Top 3 el rank debe ser 1, 2 o 3', undefined, 'INVALID_RANK');
-      }
-
-      const lockedRankVote = await tx.sessionVote.findFirst({
-        where: {
-          userId,
-          rank,
-          proposal: { sessionId, status: ProposalStatus.accepted },
-        },
-        select: { proposalId: true },
+  try {
+    if (needsGuestParticipant) {
+      await prisma.$transaction([
+        prisma.sessionParticipant.upsert({
+          where: { sessionId_userId: { sessionId, userId } },
+          update: {},
+          create: { sessionId, userId, rsvp: RsvpStatus.going },
+        }),
+        prisma.sessionVote.create({
+          data: { proposalId, userId, rank: 1 },
+        }),
+      ]);
+    } else {
+      await prisma.sessionVote.create({
+        data: { proposalId, userId, rank: 1 },
       });
-
-      if (lockedRankVote) {
-        throw badRequest(
-          `Tu puesto ${rank}° ya se usó en un juego confirmado para la mesa`,
-          { rank },
-          'RANK_LOCKED_IN_ACCEPTED',
-        );
-      }
-
-      // Free the same rank only on other open proposals of this session
-      await tx.sessionVote.deleteMany({
-        where: {
-          userId,
-          rank,
-          proposalId: { not: proposalId },
-          proposal: { sessionId, status: ProposalStatus.open },
-        },
-      });
-
-      await tx.sessionVote.upsert({
-        where: { proposalId_userId: { proposalId, userId } },
-        update: { rank },
-        create: { proposalId, userId, rank },
-      });
-      return;
     }
-
-    if (session.votingMode === VotingMode.single_choice) {
-      const lockedVote = await tx.sessionVote.findFirst({
-        where: {
-          userId,
-          proposal: { sessionId, status: ProposalStatus.accepted },
-        },
-        select: { proposalId: true },
-      });
-
-      if (lockedVote) {
-        throw badRequest(
-          'Tu voto ya se usó en un juego confirmado para la mesa',
-          undefined,
-          'VOTE_LOCKED_IN_ACCEPTED',
-        );
-      }
-
-      await tx.sessionVote.deleteMany({
-        where: {
-          userId,
-          proposalId: { not: proposalId },
-          proposal: { sessionId, status: ProposalStatus.open },
-        },
-      });
-
-      await tx.sessionVote.upsert({
-        where: { proposalId_userId: { proposalId, userId } },
-        update: { rank: 1 },
-        create: { proposalId, userId, rank: 1 },
-      });
-      return;
+  } catch (error) {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')) {
+      throw error;
     }
+  }
 
-    // multi_vote: votes on accepted proposals remain consumed and count toward maxVotesPerUser
-    const existingVote = await tx.sessionVote.findUnique({
-      where: { proposalId_userId: { proposalId, userId } },
-    });
+  targetProposal.votes.push({ userId, rank: 1 });
 
-    if (existingVote) {
-      return;
-    }
-
-    const currentVoteCount = await tx.sessionVote.count({
-      where: {
-        userId,
-        proposal: { sessionId },
-      },
-    });
-
-    if (currentVoteCount >= session.maxVotesPerUser) {
-      throw badRequest(
-        `Ya usaste el máximo de ${session.maxVotesPerUser} votos en esta juntada`,
-        { maxVotesPerUser: session.maxVotesPerUser },
-        'MAX_VOTES_REACHED',
-      );
-    }
-
-    await tx.sessionVote.create({
-      data: { proposalId, userId, rank: 1 },
-    });
-  });
-
-  return getSessionDetail(userId, sessionId, scope);
+  return buildVotesSnapshot(
+    sessionId,
+    session.votingMode,
+    session.maxVotesPerUser,
+    userId,
+    proposals,
+  );
 }
 
 export async function removeVote(
@@ -928,8 +1130,20 @@ export async function removeVote(
   sessionId: string,
   proposalId: string,
   scope?: SessionAccessScope,
-) {
-  const { session } = await assertSessionAccess(userId, sessionId, scope);
+): Promise<SessionVotesSnapshot> {
+  const [{ session }, proposals] = await Promise.all([
+    assertSessionAccess(userId, sessionId, scope),
+    prisma.sessionProposal.findMany({
+      where: { sessionId },
+      select: {
+        id: true,
+        status: true,
+        acceptedAt: true,
+        createdAt: true,
+        votes: { select: { userId: true, rank: true } },
+      },
+    }),
+  ]);
 
   if (session.status !== SessionStatus.voting && session.status !== SessionStatus.planning) {
     throw badRequest(
@@ -939,16 +1153,13 @@ export async function removeVote(
     );
   }
 
-  const proposal = await prisma.sessionProposal.findFirst({
-    where: { id: proposalId, sessionId },
-    select: { id: true, status: true },
-  });
+  const targetProposal = proposals.find((p) => p.id === proposalId);
 
-  if (!proposal) {
+  if (!targetProposal) {
     throw notFound('Propuesta no encontrada en esta juntada', 'PROPOSAL_NOT_FOUND');
   }
 
-  if (proposal.status === ProposalStatus.accepted) {
+  if (targetProposal.status === ProposalStatus.accepted) {
     throw badRequest(
       'No podés quitar tu voto de un juego que ya fue confirmado para la mesa',
       undefined,
@@ -956,13 +1167,22 @@ export async function removeVote(
     );
   }
 
-  await prisma.sessionVote.deleteMany({
-    where: {
-      proposalId,
-      userId,
-      proposal: { sessionId, status: ProposalStatus.open },
-    },
-  });
+  const hadVote = targetProposal.votes.some((v) => v.userId === userId);
+  if (hadVote) {
+    await prisma.sessionVote.deleteMany({
+      where: {
+        proposalId,
+        userId,
+      },
+    });
+    targetProposal.votes = targetProposal.votes.filter((v) => v.userId !== userId);
+  }
 
-  return getSessionDetail(userId, sessionId, scope);
+  return buildVotesSnapshot(
+    sessionId,
+    session.votingMode,
+    session.maxVotesPerUser,
+    userId,
+    proposals,
+  );
 }

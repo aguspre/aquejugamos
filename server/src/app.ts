@@ -28,11 +28,12 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   const allowedOrigins = env.CORS_ORIGIN.split(',')
-    .map((origin) => origin.trim())
+    .map((origin) => origin.trim().replace(/\/+$/, ''))
     .filter(Boolean);
 
   await app.register(cors, {
     origin: allowedOrigins.length <= 1 ? allowedOrigins[0] ?? true : allowedOrigins,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     credentials: true,
   });
 

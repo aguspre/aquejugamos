@@ -53,6 +53,7 @@ export async function authenticate(
     }
 
     const user = await syncFirebaseUser(decoded);
+    request.syncedUser = user;
     request.user = {
       sub: user.id,
       email: user.email,

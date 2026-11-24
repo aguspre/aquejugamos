@@ -2,6 +2,7 @@ import { Prisma, UserGameStatus } from '@prisma/client';
 import { getEnv } from '../../config/env.js';
 import { prisma } from '../../config/prisma.js';
 import { badRequest, notFound } from '../../utils/errors.js';
+import { invalidateFirebaseUserCacheByUserId } from '../auth/auth.service.js';
 import { getBggClient } from './bgg.client.js';
 import { getBggGuard, type BggSyncQuotaStatus } from './bgg.guard.js';
 import { bggUsernameSchema, type BggImportBody } from './bgg.schemas.js';
@@ -266,6 +267,7 @@ export async function syncUserBggCollection(
         lastBggSyncAt: syncedAt,
       },
     });
+    invalidateFirebaseUserCacheByUserId(userId);
 
     syncSlot.release(true);
 

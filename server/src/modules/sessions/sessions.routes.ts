@@ -149,24 +149,24 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   app.post('/:sessionId/proposals/:proposalId/vote', async (request) => {
     const { sessionId, proposalId } = proposalParamsSchema.parse(request.params);
     const { rank } = castVoteSchema.parse(request.body ?? {});
-    const session = await castVote(
+    const votes = await castVote(
       request.user.sub,
       sessionId,
       proposalId,
       rank,
       getSessionScope(request),
     );
-    return { session };
+    return { votes };
   });
 
   app.delete('/:sessionId/proposals/:proposalId/vote', async (request) => {
     const { sessionId, proposalId } = proposalParamsSchema.parse(request.params);
-    const session = await removeVote(
+    const votes = await removeVote(
       request.user.sub,
       sessionId,
       proposalId,
       getSessionScope(request),
     );
-    return { session };
+    return { votes };
   });
 }

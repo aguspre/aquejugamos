@@ -15,6 +15,7 @@ import type {
   ApiPoolGame,
   ApiSessionDetail,
   ApiSessionListItem,
+  ApiSessionVotesSnapshot,
   ApiUserSummary,
 } from './mappers';
 
@@ -336,7 +337,7 @@ export const sessionsApi = {
     ),
 
   castVote: (sessionId: string, proposalId: string, rank = 1) =>
-    apiRequest<{ session: ApiSessionDetail }>(
+    apiRequest<{ votes: ApiSessionVotesSnapshot }>(
       `/api/sessions/${sessionId}/proposals/${proposalId}/vote`,
       {
         method: 'POST',
@@ -345,7 +346,7 @@ export const sessionsApi = {
     ),
 
   removeVote: (sessionId: string, proposalId: string) =>
-    apiRequest<{ session: ApiSessionDetail }>(
+    apiRequest<{ votes: ApiSessionVotesSnapshot }>(
       `/api/sessions/${sessionId}/proposals/${proposalId}/vote`,
       { method: 'DELETE' },
     ),

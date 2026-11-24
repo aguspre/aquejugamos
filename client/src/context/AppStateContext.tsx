@@ -19,6 +19,8 @@ import {
   type BggSyncResponse,
 } from "../api/endpoints";
 import {
+  applyOptimisticVote,
+  applyVotesSnapshot,
   getInitials,
   mapGroup,
   mapLibraryItem,
@@ -145,6 +147,8 @@ interface AppStateContextValue {
     sessionId: string,
     proposalId: string,
     rank?: number,
+    currentSession?: GameSession,
+    onOptimistic?: (optimisticSession: GameSession) => void,
   ) => Promise<GameSession>;
   toggleSessionLock: (sessionId: string) => Promise<GameSession>;
   // Play log actions
@@ -759,9 +763,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       sessionId: string,
       proposalId: string,
       requestedRank?: number,
+      currentSession?: GameSession,
+      onOptimistic?: (optimisticSession: GameSession) => void,
     ): Promise<GameSession> => {
       ensureSessionAccess();
-      const targetSession = sessions.find((s) => s.id === sessionId);
+      const targetSession =
+        currentSession ?? sessions.find((s) => s.id === sessionId);
       const targetProposal = targetSession?.proposals.find(
         (p) => p.id === proposalId,
       );
@@ -774,12 +781,38 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           )
         : Boolean(targetProposal?.userVoted);
 
-      const { session } = shouldRemove
-        ? await sessionsApi.removeVote(sessionId, proposalId)
-        : await sessionsApi.castVote(sessionId, proposalId, rank);
-      const mapped = mapSessionDetail(session);
-      upsertSession(mapped);
-      return mapped;
+      if (targetSession) {
+        const optimistic = applyOptimisticVote(
+          targetSession,
+          proposalId,
+          shouldRemove,
+          rank,
+        );
+        upsertSession(optimistic);
+        onOptimistic?.(optimistic);
+      }
+
+      try {
+        const { votes } = shouldRemove
+          ? await sessionsApi.removeVote(sessionId, proposalId)
+          : await sessionsApi.castVote(sessionId, proposalId, rank);
+
+        if (targetSession) {
+          const merged = applyVotesSnapshot(targetSession, votes);
+          upsertSession(merged);
+          return merged;
+        }
+
+        const { session: detail } = await sessionsApi.getDetail(sessionId);
+        const mapped = mapSessionDetail(detail);
+        upsertSession(mapped);
+        return mapped;
+      } catch (err) {
+        if (targetSession) {
+          upsertSession(targetSession);
+        }
+        throw err;
+      }
     },
     [ensureSessionAccess, sessions, upsertSession],
   );

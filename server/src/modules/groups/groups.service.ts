@@ -1,4 +1,4 @@
-import { GroupRole, UserGameStatus } from '@prisma/client';
+import { GroupRole, Prisma, UserGameStatus } from '@prisma/client';
 import { prisma } from '../../config/prisma.js';
 import { badRequest, forbidden, notFound } from '../../utils/errors.js';
 import { generateGroupInviteCode } from '../../utils/tokens.js';
@@ -23,46 +23,42 @@ async function generateUniqueInviteCode(groupName: string): Promise<string> {
   return generateGroupInviteCode('MESA');
 }
 
-async function formatGroupDto(groupId: string) {
-  const group = await prisma.group.findUnique({
-    where: { id: groupId },
+const GROUP_DTO_INCLUDE = {
+  members: {
     include: {
-      members: {
-        include: {
-          user: { select: USER_SUMMARY_SELECT },
-        },
-        orderBy: [{ role: 'asc' }, { joinedAt: 'asc' }],
-      },
-      _count: {
-        select: { sessions: true, playLogs: true },
-      },
+      user: { select: USER_SUMMARY_SELECT },
     },
+    orderBy: [{ role: 'asc' }, { joinedAt: 'asc' }],
+  },
+  _count: {
+    select: { sessions: true, playLogs: true },
+  },
+} satisfies Prisma.GroupInclude;
+
+type GroupWithMembersAndCounts = Prisma.GroupGetPayload<{
+  include: typeof GROUP_DTO_INCLUDE;
+}>;
+
+async function fetchGroupWithMembersAndCounts(groupId: string) {
+  return prisma.group.findUnique({
+    where: { id: groupId },
+    include: GROUP_DTO_INCLUDE,
   });
+}
 
-  if (!group) {
-    throw notFound('Grupo no encontrado', 'GROUP_NOT_FOUND');
-  }
-
-  const memberIds = group.members.map((m) => m.userId);
-
-  const ownedRows =
-    memberIds.length > 0
-      ? await prisma.userGame.findMany({
-          where: {
-            userId: { in: memberIds },
-            status: UserGameStatus.owned,
-            game: { isExpansion: false },
-          },
-          select: { userId: true, gameId: true },
-        })
-      : [];
-
-  const ownedCountByUser = new Map<string, number>();
+function buildGroupDtoFromRows(
+  group: NonNullable<GroupWithMembersAndCounts>,
+  ownedGameIdsByUser: Map<string, Set<string>>,
+) {
   const uniqueGameIds = new Set<string>();
 
-  for (const row of ownedRows) {
-    uniqueGameIds.add(row.gameId);
-    ownedCountByUser.set(row.userId, (ownedCountByUser.get(row.userId) ?? 0) + 1);
+  for (const m of group.members) {
+    const userGames = ownedGameIdsByUser.get(m.userId);
+    if (userGames) {
+      for (const gameId of userGames) {
+        uniqueGameIds.add(gameId);
+      }
+    }
   }
 
   return {
@@ -77,10 +73,51 @@ async function formatGroupDto(groupId: string) {
     members: group.members.map((m) => ({
       role: m.role,
       joinedAt: m.joinedAt,
-      ownedGamesCount: ownedCountByUser.get(m.userId) ?? 0,
+      ownedGamesCount: ownedGameIdsByUser.get(m.userId)?.size ?? 0,
       user: m.user,
     })),
   };
+}
+
+async function fetchOwnedGamesByUser(
+  userIds: string[],
+): Promise<Map<string, Set<string>>> {
+  const map = new Map<string, Set<string>>();
+  if (userIds.length === 0) return map;
+
+  const ownedRows = await prisma.userGame.findMany({
+    where: {
+      userId: { in: userIds },
+      status: UserGameStatus.owned,
+      game: { isExpansion: false },
+    },
+    select: { userId: true, gameId: true },
+  });
+
+  for (const row of ownedRows) {
+    let set = map.get(row.userId);
+    if (!set) {
+      set = new Set<string>();
+      map.set(row.userId, set);
+    }
+    set.add(row.gameId);
+  }
+
+  return map;
+}
+
+async function formatGroupDto(groupId: string) {
+  const group = await fetchGroupWithMembersAndCounts(groupId);
+
+  if (!group) {
+    throw notFound('Grupo no encontrado', 'GROUP_NOT_FOUND');
+  }
+
+  const ownedGameIdsByUser = await fetchOwnedGamesByUser(
+    group.members.map((m) => m.userId),
+  );
+
+  return buildGroupDtoFromRows(group, ownedGameIdsByUser);
 }
 
 export async function assertGroupMember(userId: string, groupId: string) {
@@ -109,20 +146,44 @@ export async function assertGroupAdmin(userId: string, groupId: string) {
 export async function listUserGroups(userId: string) {
   const memberships = await prisma.groupMember.findMany({
     where: { userId },
-    select: { groupId: true },
     orderBy: { joinedAt: 'asc' },
+    include: {
+      group: {
+        include: GROUP_DTO_INCLUDE,
+      },
+    },
   });
 
-  const groups = await Promise.all(
-    memberships.map((m) => formatGroupDto(m.groupId)),
-  );
+  if (memberships.length === 0) {
+    return [];
+  }
 
-  return groups;
+  const allMemberIds = Array.from(
+    new Set(memberships.flatMap((m) => m.group.members.map((gm) => gm.userId))),
+  );
+  const ownedGameIdsByUser = await fetchOwnedGamesByUser(allMemberIds);
+
+  return memberships.map((m) =>
+    buildGroupDtoFromRows(m.group, ownedGameIdsByUser),
+  );
 }
 
 export async function getGroupById(userId: string, groupId: string) {
-  await assertGroupMember(userId, groupId);
-  return formatGroupDto(groupId);
+  const group = await fetchGroupWithMembersAndCounts(groupId);
+
+  if (!group) {
+    throw notFound('Grupo no encontrado', 'GROUP_NOT_FOUND');
+  }
+
+  if (!group.members.some((m) => m.userId === userId)) {
+    throw forbidden('No pertenecés a este grupo', 'NOT_GROUP_MEMBER');
+  }
+
+  const ownedGameIdsByUser = await fetchOwnedGamesByUser(
+    group.members.map((m) => m.userId),
+  );
+
+  return buildGroupDtoFromRows(group, ownedGameIdsByUser);
 }
 
 export async function createGroup(userId: string, input: CreateGroupInput) {

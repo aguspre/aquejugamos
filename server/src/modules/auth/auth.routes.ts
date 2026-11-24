@@ -17,6 +17,7 @@ import {
   getUserProfile,
   loginUser,
   registerUser,
+  toPublicUser,
   updateUserProfile,
 } from './auth.service.js';
 
@@ -101,14 +102,18 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
       const user = hasUpdates
         ? await updateUserProfile(request.user.sub, input)
-        : await getUserProfile(request.user.sub);
+        : request.syncedUser
+          ? toPublicUser(request.syncedUser)
+          : await getUserProfile(request.user.sub);
 
       return { user };
     },
   );
 
   app.get('/me', { preHandler: [authenticate] }, async (request) => {
-    const user = await getUserProfile(request.user.sub);
+    const user = request.syncedUser
+      ? toPublicUser(request.syncedUser)
+      : await getUserProfile(request.user.sub);
     const isGuest = Boolean(request.user.isGuest);
     const guestScope = isGuest
       ? {

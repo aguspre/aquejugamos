@@ -188,6 +188,24 @@ export interface ApiSessionDetail {
   }[];
 }
 
+export interface ApiProposalVoteSummary {
+  id: string;
+  status: ProposalStatus;
+  voteCount: number;
+  score: number;
+  userVoted: boolean;
+  userRank: number | null;
+}
+
+export interface ApiSessionVotesSnapshot {
+  sessionId: string;
+  userVotesUsed: number;
+  votesRemaining: number;
+  lockedVotesCount: number;
+  lockedRanks: number[];
+  proposals: ApiProposalVoteSummary[];
+}
+
 export interface ApiPoolGame extends ApiGame {
   owners: ApiUserSummary[];
   isProposed: boolean;
@@ -379,6 +397,143 @@ export function mapSessionDetail(detail: ApiSessionDetail): GameSession {
       user: mapUserSummary(p.user),
     })),
     proposals,
+  };
+}
+
+function getPointsForVote(votingMode: VotingMode, rank: number): number {
+  if (votingMode === 'ranked_top3') {
+    if (rank === 1) return 3;
+    if (rank === 2) return 2;
+    if (rank === 3) return 1;
+    return 0;
+  }
+  return 1;
+}
+
+export function applyVotesSnapshot(
+  session: GameSession,
+  snapshot: ApiSessionVotesSnapshot,
+): GameSession {
+  const existingById = new Map(session.proposals.map((p) => [p.id, p]));
+  const updatedProposals: SessionProposal[] = [];
+
+  for (const summary of snapshot.proposals) {
+    const existing = existingById.get(summary.id);
+    if (!existing) continue;
+    updatedProposals.push({
+      ...existing,
+      status: summary.status,
+      voteCount: summary.voteCount,
+      score: summary.score,
+      userVoted: summary.userVoted,
+      userRank: summary.userRank ?? undefined,
+    });
+  }
+
+  return {
+    ...session,
+    lockedVotesCount: snapshot.lockedVotesCount,
+    lockedRanks: snapshot.lockedRanks,
+    proposals: updatedProposals,
+  };
+}
+
+export function applyOptimisticVote(
+  session: GameSession,
+  proposalId: string,
+  shouldRemove: boolean,
+  rank = 1,
+): GameSession {
+  const mode = session.votingMode;
+
+  const nextProposals = session.proposals.map((p) => {
+    if (p.status === 'accepted') return p;
+
+    if (shouldRemove) {
+      if (p.id !== proposalId || !p.userVoted) return p;
+      const oldPoints = getPointsForVote(mode, p.userRank ?? 1);
+      return {
+        ...p,
+        voteCount: Math.max(0, p.voteCount - 1),
+        score: Math.max(0, p.score - oldPoints),
+        userVoted: false,
+        userRank: undefined,
+      };
+    }
+
+    if (mode === 'ranked_top3') {
+      if (p.id === proposalId) {
+        const nextPoints = getPointsForVote(mode, rank);
+        if (p.userVoted) {
+          const oldPoints = getPointsForVote(mode, p.userRank ?? 1);
+          return {
+            ...p,
+            score: Math.max(0, p.score - oldPoints + nextPoints),
+            userVoted: true,
+            userRank: rank,
+          };
+        }
+        return {
+          ...p,
+          voteCount: p.voteCount + 1,
+          score: p.score + nextPoints,
+          userVoted: true,
+          userRank: rank,
+        };
+      }
+
+      if (p.userVoted && p.userRank === rank) {
+        const oldPoints = getPointsForVote(mode, rank);
+        return {
+          ...p,
+          voteCount: Math.max(0, p.voteCount - 1),
+          score: Math.max(0, p.score - oldPoints),
+          userVoted: false,
+          userRank: undefined,
+        };
+      }
+      return p;
+    }
+
+    if (mode === 'single_choice') {
+      if (p.id === proposalId) {
+        if (p.userVoted) return { ...p, userRank: 1 };
+        return {
+          ...p,
+          voteCount: p.voteCount + 1,
+          score: p.score + 1,
+          userVoted: true,
+          userRank: 1,
+        };
+      }
+      if (p.userVoted) {
+        return {
+          ...p,
+          voteCount: Math.max(0, p.voteCount - 1),
+          score: Math.max(0, p.score - 1),
+          userVoted: false,
+          userRank: undefined,
+        };
+      }
+      return p;
+    }
+
+    // multi_vote
+    if (p.id === proposalId && !p.userVoted) {
+      return {
+        ...p,
+        voteCount: p.voteCount + 1,
+        score: p.score + 1,
+        userVoted: true,
+        userRank: 1,
+      };
+    }
+    return p;
+  });
+
+  return {
+    ...session,
+    proposals: nextProposals,
   };
 }
 

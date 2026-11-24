@@ -22,9 +22,10 @@ import {
   Users,
   Vote,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { ApiError } from "../api/client";
+import { applyOptimisticVote } from "../api/mappers";
 import { GuestLockedView } from "../components/auth/GuestLockedView";
 import { GameCard } from "../components/game/GameCard";
 import { GameDetailDrawer } from "../components/game/GameDetailDrawer";
@@ -108,6 +109,9 @@ export function SessionRoomPage() {
   const [proposalNote, setProposalNote] = useState("");
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [busyAction, setBusyAction] = useState(false);
+  const voteSeqRef = useRef(0);
+  const voteQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const lastConfirmedSessionRef = useRef<GameSession | null>(session);
 
   const inviteTokenParam = searchParams.get("invite");
   const shouldRedirectInviteToWelcome = Boolean(
@@ -126,16 +130,21 @@ export function SessionRoomPage() {
     try {
       const inviteToken = searchParams.get("invite");
       let loadedSession: GameSession;
+      let pool: SessionGameItem[];
 
       if (inviteToken) {
         loadedSession = await joinSessionByToken(inviteToken, "going");
         setSearchParams({}, { replace: true });
+        pool = await loadSessionPool(loadedSession.id);
       } else {
-        loadedSession = await loadSessionDetail(id);
+        [loadedSession, pool] = await Promise.all([
+          loadSessionDetail(id),
+          loadSessionPool(id),
+        ]);
       }
 
+      lastConfirmedSessionRef.current = loadedSession;
       setSession(loadedSession);
-      const pool = await loadSessionPool(loadedSession.id);
       setSessionPool(pool);
     } catch (err) {
       setErrorMsg(
@@ -300,6 +309,7 @@ export function SessionRoomPage() {
     setErrorMsg(null);
     try {
       const updated = await action();
+      lastConfirmedSessionRef.current = updated;
       setSession(updated);
       if (refreshPoolToo) {
         const pool = await loadSessionPool(updated.id);
@@ -314,6 +324,51 @@ export function SessionRoomPage() {
     } finally {
       setBusyAction(false);
     }
+  };
+
+  const handleVote = (proposalId: string, requestedRank?: number) => {
+    if (!session) return;
+    const seq = ++voteSeqRef.current;
+    const baseSnapshot = session;
+    const targetProposal = baseSnapshot.proposals.find(
+      (p) => p.id === proposalId,
+    );
+    const isRanked = baseSnapshot.votingMode === "ranked_top3";
+    const rank = requestedRank ?? 1;
+    const shouldRemove = isRanked
+      ? Boolean(targetProposal?.userVoted && targetProposal?.userRank === rank)
+      : Boolean(targetProposal?.userVoted);
+
+    setErrorMsg(null);
+    setSession(
+      applyOptimisticVote(baseSnapshot, proposalId, shouldRemove, rank),
+    );
+
+    voteQueueRef.current = voteQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          const updated = await toggleVote(
+            baseSnapshot.id,
+            proposalId,
+            requestedRank,
+            baseSnapshot,
+          );
+          lastConfirmedSessionRef.current = updated;
+          if (seq === voteSeqRef.current) {
+            setSession(updated);
+          }
+        } catch (err) {
+          if (seq === voteSeqRef.current && lastConfirmedSessionRef.current) {
+            setSession(lastConfirmedSessionRef.current);
+          }
+          setErrorMsg(
+            err instanceof ApiError
+              ? err.message
+              : "No se pudo registrar tu voto.",
+          );
+        }
+      });
   };
 
   const handleCopyInvite = () => {
@@ -1166,13 +1221,7 @@ export function SessionRoomPage() {
                                           : undefined
                                       }
                                       onClick={() =>
-                                        void runSessionAction(() =>
-                                          toggleVote(
-                                            session.id,
-                                            proposal.id,
-                                            rank,
-                                          ),
-                                        )
+                                        handleVote(proposal.id, rank)
                                       }
                                       className={`inline-flex min-h-9 min-w-11 items-center justify-center rounded-xl border px-2.5 text-xs font-extrabold num-tabular transition ${
                                         isSelected
@@ -1191,11 +1240,7 @@ export function SessionRoomPage() {
                               <button
                                 type="button"
                                 disabled={busyAction || cannotAddVote}
-                                onClick={() =>
-                                  void runSessionAction(() =>
-                                    toggleVote(session.id, proposal.id),
-                                  )
-                                }
+                                onClick={() => handleVote(proposal.id)}
                                 className={`inline-flex min-h-10 items-center gap-2 rounded-xl px-4 text-xs font-bold transition ${
                                   proposal.userVoted
                                     ? "border border-terracotta-200 bg-terracotta-50 text-terracotta-700 hover:bg-terracotta-100"

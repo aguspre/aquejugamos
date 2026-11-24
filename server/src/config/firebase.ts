@@ -110,7 +110,10 @@ export function getFirebaseAuth(): Auth {
   return getAuth(app);
 }
 
-export async function verifyFirebaseIdToken(idToken: string): Promise<DecodedIdToken> {
+export async function verifyFirebaseIdToken(
+  idToken: string,
+  checkRevoked = false,
+): Promise<DecodedIdToken> {
   const auth = getFirebaseAuth();
-  return auth.verifyIdToken(idToken, true);
+  return auth.verifyIdToken(idToken, checkRevoked);
 }
