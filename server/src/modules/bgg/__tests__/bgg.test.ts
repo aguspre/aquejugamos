@@ -220,6 +220,38 @@ describe('BggClient polling & batching', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(games).toHaveLength(45);
   });
+
+  it('permite consultar /thing sin stats=1 para obtener miniaturas de búsqueda livianas', async () => {
+    const requestedUrls: string[] = [];
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      requestedUrls.push(String(input));
+      return new Response(
+        `<items><item type="boardgame" id="40628"><thumbnail>https://cf.geekdo-images.com/finca_t.jpg</thumbnail><name type="primary" value="Finca" /><minplayers value="2" /><maxplayers value="4" /><playingtime value="45" /></item></items>`,
+        { status: 200 },
+      );
+    });
+
+    const client = new BggClient({
+      baseUrl: 'https://boardgamegeek.com/xmlapi2',
+      fetchFn: fetchMock,
+      sleepFn: async () => {},
+      thingBatchDelayMs: 0,
+    });
+
+    const games = await client.fetchThingsByIds([40628], { includeStats: false });
+    expect(requestedUrls).toHaveLength(1);
+    const parsedUrl = new URL(requestedUrls[0]!);
+    expect(parsedUrl.searchParams.get('id')).toBe('40628');
+    expect(parsedUrl.searchParams.has('stats')).toBe(false);
+    expect(games[0]).toMatchObject({
+      bggId: 40628,
+      name: 'Finca',
+      thumbnailUrl: 'https://cf.geekdo-images.com/finca_t.jpg',
+      minPlayers: 2,
+      maxPlayers: 4,
+      playingTimeMinutes: 45,
+    });
+  });
 });
 
 describe('Password hashing', () => {
@@ -395,6 +427,64 @@ describe('BggGuard (cuota diaria, cooldown, concurrencia, cache y rate limits)',
         code: 'BGG_IMPORT_RATE_LIMITED',
       }),
     );
+  });
+
+  it('cachea previews de búsqueda con TTL y evicción LRU', () => {
+    let now = Date.UTC(2026, 10, 24, 12, 0, 0);
+    const guard = new BggGuard({
+      maxSyncsPerDay: 2,
+      sameUserCooldownMs: 0,
+      searchRateLimitPerMin: 15,
+      importRateLimitPerHour: 30,
+      searchCacheTtlMs: 15 * 60 * 1000,
+      previewCacheTtlMs: 30 * 60 * 1000,
+      maxPreviewCacheEntries: 2,
+      nowFn: () => now,
+    });
+
+    guard.cacheThingPreviews([
+      {
+        bggId: 40628,
+        thumbnailUrl: 'https://cf.geekdo-images.com/finca_t.jpg',
+        imageUrl: null,
+        minPlayers: 2,
+        maxPlayers: 4,
+        playingTimeMinutes: 45,
+      },
+      {
+        bggId: 13,
+        thumbnailUrl: 'https://cf.geekdo-images.com/catan_t.jpg',
+        imageUrl: null,
+        minPlayers: 3,
+        maxPlayers: 4,
+        playingTimeMinutes: 120,
+      },
+    ]);
+
+    // Accedemos a 40628 para refrescar su posición LRU antes de insertar un 3ro
+    expect(guard.getCachedThingPreviews([40628]).get(40628)?.thumbnailUrl).toBe(
+      'https://cf.geekdo-images.com/finca_t.jpg',
+    );
+
+    guard.cacheThingPreviews([
+      {
+        bggId: 266192,
+        thumbnailUrl: 'https://cf.geekdo-images.com/wingspan_t.jpg',
+        imageUrl: null,
+        minPlayers: 1,
+        maxPlayers: 5,
+        playingTimeMinutes: 70,
+      },
+    ]);
+
+    const afterEviction = guard.getCachedThingPreviews([40628, 13, 266192]);
+    expect(afterEviction.has(40628)).toBe(true);
+    expect(afterEviction.has(266192)).toBe(true);
+    expect(afterEviction.has(13)).toBe(false);
+
+    // Expiración por TTL
+    now += 31 * 60 * 1000;
+    expect(guard.getCachedThingPreviews([40628, 266192]).size).toBe(0);
   });
 });
 

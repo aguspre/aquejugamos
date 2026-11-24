@@ -207,22 +207,30 @@ export class BggClient {
     return parseBggCollectionXml(xml);
   }
 
-  public async fetchThingsByIds(bggIds: number[]): Promise<BggGameDetails[]> {
+  public async fetchThingsByIds(
+    bggIds: number[],
+    options: { includeStats?: boolean } = {},
+  ): Promise<BggGameDetails[]> {
     const uniqueIds = Array.from(new Set(bggIds.filter((id) => Number.isInteger(id) && id > 0)));
     if (uniqueIds.length === 0) {
       return [];
     }
 
+    const includeStats = options.includeStats ?? true;
     const results: BggGameDetails[] = [];
 
     for (let i = 0; i < uniqueIds.length; i += THING_BATCH_SIZE) {
       const batch = uniqueIds.slice(i, i + THING_BATCH_SIZE);
+      const params: Record<string, string> = {
+        id: batch.join(','),
+      };
+      if (includeStats) {
+        params.stats = '1';
+      }
+
       const xml = await this.fetchXml(
         'thing',
-        {
-          id: batch.join(','),
-          stats: '1',
-        },
+        params,
         {
           maxAttempts: 4,
           initialDelayMs: 1000,
