@@ -166,6 +166,79 @@ describe('Session voting scoring', () => {
       lockedRanks: [1],
     });
   });
+
+  it('devuelve los votos disponibles al quitar una propuesta abierta votada sin afectar juegos aceptados', () => {
+    // multi_vote: tenía 1 voto en propuesta aceptada + 2 en propuestas abiertas (0 disponibles)
+    const multiBefore = computeUserVoteQuota(
+      [
+        { status: ProposalStatus.accepted, userVoted: true, userRank: 1 },
+        { status: ProposalStatus.open, userVoted: true, userRank: 1 },
+        { status: ProposalStatus.open, userVoted: true, userRank: 1 },
+      ],
+      VotingMode.multi_vote,
+      3,
+    );
+    expect(multiBefore.votesRemaining).toBe(0);
+
+    // Se quita una de las propuestas abiertas votadas -> se recupera 1 voto disponible
+    const multiAfter = computeUserVoteQuota(
+      [
+        { status: ProposalStatus.accepted, userVoted: true, userRank: 1 },
+        { status: ProposalStatus.open, userVoted: true, userRank: 1 },
+      ],
+      VotingMode.multi_vote,
+      3,
+    );
+    expect(multiAfter).toEqual({
+      userVotesUsed: 2,
+      votesRemaining: 1,
+      lockedVotesCount: 1,
+      lockedRanks: [1],
+    });
+
+    // single_choice: al quitar la propuesta abierta votada recupera su único voto
+    const singleAfter = computeUserVoteQuota(
+      [{ status: ProposalStatus.open, userVoted: false, userRank: null }],
+      VotingMode.single_choice,
+      1,
+    );
+    expect(singleAfter).toEqual({
+      userVotesUsed: 0,
+      votesRemaining: 1,
+      lockedVotesCount: 0,
+      lockedRanks: [],
+    });
+
+    // ranked_top3: al quitar la propuesta con rango 2° recupera ese cupo y conserva 1° bloqueado en aceptado
+    const rankedAfter = computeUserVoteQuota(
+      [
+        { status: ProposalStatus.accepted, userVoted: true, userRank: 1 },
+        { status: ProposalStatus.open, userVoted: false, userRank: null },
+      ],
+      VotingMode.ranked_top3,
+      3,
+    );
+    expect(rankedAfter).toEqual({
+      userVotesUsed: 1,
+      votesRemaining: 2,
+      lockedVotesCount: 1,
+      lockedRanks: [1],
+    });
+
+    // Lista vacía tras quitar la única propuesta
+    expect(computeUserVoteQuota([], VotingMode.single_choice, 1)).toEqual({
+      userVotesUsed: 0,
+      votesRemaining: 1,
+      lockedVotesCount: 0,
+      lockedRanks: [],
+    });
+    expect(computeUserVoteQuota([], VotingMode.ranked_top3, 3)).toEqual({
+      userVotesUsed: 0,
+      votesRemaining: 3,
+      lockedVotesCount: 0,
+      lockedRanks: [],
+    });
+  });
 });
 
 describe('Combined session pool aggregation', () => {

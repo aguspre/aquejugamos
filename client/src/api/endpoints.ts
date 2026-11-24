@@ -331,7 +331,7 @@ export const sessionsApi = {
     ),
 
   removeProposal: (sessionId: string, proposalId: string) =>
-    apiRequest<{ session: ApiSessionDetail }>(
+    apiRequest<{ session: ApiSessionDetail; refundedVotesCount?: number }>(
       `/api/sessions/${sessionId}/proposals/${proposalId}`,
       { method: 'DELETE' },
     ),
