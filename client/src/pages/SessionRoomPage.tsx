@@ -25,7 +25,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { ApiError } from "../api/client";
-import { applyOptimisticVote } from "../api/mappers";
+import { applyOptimisticRsvp, applyOptimisticVote } from "../api/mappers";
 import { GuestLockedView } from "../components/auth/GuestLockedView";
 import { GameCard } from "../components/game/GameCard";
 import { GameDetailDrawer } from "../components/game/GameDetailDrawer";
@@ -112,6 +112,8 @@ export function SessionRoomPage() {
   const [busyAction, setBusyAction] = useState(false);
   const voteSeqRef = useRef(0);
   const voteQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const rsvpSeqRef = useRef(0);
+  const rsvpQueueRef = useRef<Promise<void>>(Promise.resolve());
   const lastConfirmedSessionRef = useRef<GameSession | null>(session);
 
   const inviteTokenParam = searchParams.get("invite");
@@ -325,6 +327,50 @@ export function SessionRoomPage() {
     } finally {
       setBusyAction(false);
     }
+  };
+
+  const handleRsvpChange = (nextRsvp: RsvpStatus) => {
+    if (!session || myRsvp === nextRsvp) return;
+    const seq = ++rsvpSeqRef.current;
+    const baseSnapshot = session;
+    const optimistic = applyOptimisticRsvp(baseSnapshot, currentUser, nextRsvp);
+
+    setErrorMsg(null);
+    setSession(optimistic);
+
+    rsvpQueueRef.current = rsvpQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          const updated = await updateRsvp(
+            baseSnapshot.id,
+            currentUser.id,
+            nextRsvp,
+            baseSnapshot,
+          );
+          lastConfirmedSessionRef.current = updated;
+          if (seq === rsvpSeqRef.current) {
+            setSession(updated);
+            try {
+              const pool = await loadSessionPool(updated.id);
+              if (seq === rsvpSeqRef.current) {
+                setSessionPool(pool);
+              }
+            } catch {
+              // Pool refresh failure does not revert a confirmed RSVP update
+            }
+          }
+        } catch (err) {
+          if (seq === rsvpSeqRef.current && lastConfirmedSessionRef.current) {
+            setSession(lastConfirmedSessionRef.current);
+          }
+          setErrorMsg(
+            err instanceof ApiError
+              ? err.message
+              : "No se pudo actualizar tu estado de asistencia. Se restauró el estado anterior.",
+          );
+        }
+      });
   };
 
   const handleVote = (proposalId: string, requestedRank?: number) => {
@@ -588,13 +634,8 @@ export function SessionRoomPage() {
                   <button
                     key={opt.id}
                     type="button"
-                    disabled={busyAction}
-                    onClick={() =>
-                      void runSessionAction(
-                        () => updateRsvp(session.id, currentUser.id, opt.id),
-                        true,
-                      )
-                    }
+                    aria-pressed={active}
+                    onClick={() => handleRsvpChange(opt.id)}
                     className={`min-h-8 rounded-lg px-2.5 text-xs font-bold transition border ${
                       active
                         ? opt.activeClass
