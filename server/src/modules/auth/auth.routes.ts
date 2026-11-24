@@ -5,6 +5,7 @@ import {
   googleAuthSchema,
   loginSchema,
   registerSchema,
+  syncProfileSchema,
   updateProfileSchema,
 } from './auth.schemas.js';
 import {
@@ -46,6 +47,20 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const token = signUserToken(user);
 
     return { token, user };
+  });
+
+  app.post('/sync', { preHandler: [authenticate] }, async (request) => {
+    const input = syncProfileSchema.parse(request.body);
+    const hasUpdates =
+      input.displayName !== undefined ||
+      input.avatarUrl !== undefined ||
+      input.bggUsername !== undefined;
+
+    const user = hasUpdates
+      ? await updateUserProfile(request.user.sub, input)
+      : await getUserProfile(request.user.sub);
+
+    return { user };
   });
 
   app.get('/me', { preHandler: [authenticate] }, async (request) => {

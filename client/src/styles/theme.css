@@ -165,3 +165,15 @@
 .num-tabular {
   font-variant-numeric: tabular-nums;
 }
+
+/* Native modal <dialog> scroll containment & tabletop backdrop */
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog::backdrop {
+  background-color: rgba(31, 36, 33, 0.45);
+  backdrop-filter: blur(4px);
+  overflow: hidden;
+  overscroll-behavior: contain;
+}

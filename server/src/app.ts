@@ -4,11 +4,15 @@ import { Prisma } from '@prisma/client';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import { getEnv } from './config/env.js';
+import { isFirebaseAdminConfigured } from './config/firebase.js';
 import { prisma } from './config/prisma.js';
 import { authenticate } from './middleware/auth.js';
 import { authRoutes } from './modules/auth/auth.routes.js';
 import { bggRoutes } from './modules/bgg/bgg.routes.js';
+import { groupRoutes } from './modules/groups/groups.routes.js';
 import { libraryRoutes } from './modules/library/library.routes.js';
+import { playLogRoutes } from './modules/play-logs/play-logs.routes.js';
+import { sessionRoutes } from './modules/sessions/sessions.routes.js';
 import { AppError } from './utils/errors.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
@@ -92,12 +96,19 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   app.get('/api/health', async () => {
     await prisma.$queryRaw`SELECT 1`;
-    return { status: 'ok', timestamp: new Date().toISOString() };
+    return {
+      status: 'ok',
+      firebaseAdmin: isFirebaseAdminConfigured(),
+      timestamp: new Date().toISOString(),
+    };
   });
 
   await app.register(authRoutes, { prefix: '/api/auth' });
   await app.register(bggRoutes, { prefix: '/api/bgg' });
   await app.register(libraryRoutes, { prefix: '/api/library' });
+  await app.register(groupRoutes, { prefix: '/api/groups' });
+  await app.register(sessionRoutes, { prefix: '/api/sessions' });
+  await app.register(playLogRoutes, { prefix: '/api/play-logs' });
 
   return app;
 }

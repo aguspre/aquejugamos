@@ -1,4 +1,5 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
+import { useAuth } from './AuthContext';
 import {
   CURRENT_USER,
   DEMO_JOINABLE_GROUP,
@@ -121,7 +122,18 @@ function generateInviteCode(groupName: string): string {
   return `${prefix || 'MESA'}-${suffix}`;
 }
 
+function buildInitials(name: string): string {
+  const parts = name
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) return 'JG';
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return `${parts[0]![0] ?? ''}${parts[parts.length - 1]![0] ?? ''}`.toUpperCase();
+}
+
 export function AppStateProvider({ children }: { children: ReactNode }) {
+  const { firebaseUser, backendUser } = useAuth();
   const [groups, setGroups] = useState<Group[]>(MOCK_GROUPS);
   const [activeGroupId, setActiveGroupId] = useState<string>(MOCK_GROUPS[0]!.id);
   const [library, setLibrary] = useState<LibraryGameItem[]>(MOCK_PERSONAL_LIBRARY);
@@ -137,6 +149,31 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     playerIds?: string[];
   }>({ open: false });
 
+  const currentUser = useMemo<UserSummary>(() => {
+    if (!firebaseUser) {
+      return CURRENT_USER;
+    }
+
+    const displayName =
+      backendUser?.displayName?.trim() ||
+      firebaseUser.displayName?.trim() ||
+      firebaseUser.email?.split('@')[0] ||
+      CURRENT_USER.displayName;
+
+    return {
+      ...CURRENT_USER,
+      displayName,
+      avatarUrl: backendUser?.avatarUrl ?? firebaseUser.photoURL ?? undefined,
+      bggUsername: backendUser?.bggUsername ?? undefined,
+      initials: buildInitials(displayName),
+    };
+  }, [firebaseUser, backendUser]);
+
+  const users = useMemo<UserSummary[]>(
+    () => MOCK_USERS.map((u) => (u.id === CURRENT_USER.id ? currentUser : u)),
+    [currentUser],
+  );
+
   const activeGroup = useMemo(
     () => groups.find((g) => g.id === activeGroupId) ?? groups[0]!,
     [groups, activeGroupId],
@@ -151,13 +188,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       );
       const myEntry = library.find((item) => item.id === game.id);
       if (myEntry?.status === 'owned') {
-        map[game.id] = [CURRENT_USER, ...baseOwners];
+        map[game.id] = [currentUser, ...baseOwners];
       } else {
         map[game.id] = baseOwners;
       }
     }
     return map;
-  }, [library]);
+  }, [library, currentUser]);
 
   const getUserOwnedGameCount = (userId: string): number => {
     let count = 0;
@@ -599,8 +636,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   return (
     <AppStateContext.Provider
       value={{
-        currentUser: CURRENT_USER,
-        users: MOCK_USERS,
+        currentUser,
+        users,
         groups,
         activeGroupId: activeGroup.id,
         activeGroup,

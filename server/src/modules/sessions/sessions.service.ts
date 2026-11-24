@@ -1,0 +1,744 @@
+import {
+  GroupRole,
+  Prisma,
+  RsvpStatus,
+  SessionStatus,
+  UserGameStatus,
+  VotingMode,
+} from '@prisma/client';
+import { prisma } from '../../config/prisma.js';
+import { badRequest, conflict, forbidden, notFound } from '../../utils/errors.js';
+import { generateSessionInviteToken } from '../../utils/tokens.js';
+import { assertGroupMember } from '../groups/groups.service.js';
+import type {
+  CreateProposalInput,
+  CreateSessionInput,
+  ListSessionsQuery,
+  SessionPoolQuery,
+} from './sessions.schemas.js';
+import {
+  aggregateCombinedPool,
+  scoreProposalVotes,
+  sortScoredProposals,
+  type OwnerSummary,
+  type PoolGameInput,
+} from './sessions.scoring.js';
+
+const USER_SUMMARY_SELECT = {
+  id: true,
+  displayName: true,
+  avatarUrl: true,
+  bggUsername: true,
+} as const;
+
+const GAME_WITH_MECHANICS_INCLUDE = {
+  mechanics: {
+    include: {
+      mechanic: true,
+    },
+  },
+} as const;
+
+type GameWithMechanics = Prisma.GameGetPayload<{
+  include: typeof GAME_WITH_MECHANICS_INCLUDE;
+}>;
+
+function decimalToNumber(value: Prisma.Decimal | null | undefined): number | null {
+  return value !== null && value !== undefined ? Number(value) : null;
+}
+
+function formatGame(game: GameWithMechanics): PoolGameInput {
+  return {
+    id: game.id,
+    bggId: game.bggId,
+    name: game.name,
+    yearPublished: game.yearPublished,
+    imageUrl: game.imageUrl,
+    thumbnailUrl: game.thumbnailUrl,
+    minPlayers: game.minPlayers,
+    maxPlayers: game.maxPlayers,
+    bestPlayers: game.bestPlayers,
+    playingTimeMinutes: game.playingTimeMinutes,
+    weight: decimalToNumber(game.weight),
+    bggRating: decimalToNumber(game.bggRating),
+    isExpansion: game.isExpansion,
+    baseGameBggId: game.baseGameBggId,
+    mechanics: game.mechanics
+      .map((gm) => ({
+        id: gm.mechanic.id,
+        bggId: gm.mechanic.bggId,
+        name: gm.mechanic.name,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'es')),
+  };
+}
+
+export async function assertSessionAccess(userId: string, sessionId: string) {
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+    include: {
+      participants: {
+        where: { userId },
+        select: { userId: true, rsvp: true },
+      },
+      group: {
+        select: {
+          id: true,
+          members: {
+            where: { userId },
+            select: { role: true },
+          },
+        },
+      },
+    },
+  });
+
+  if (!session) {
+    throw notFound('Juntada no encontrada', 'SESSION_NOT_FOUND');
+  }
+
+  const isHost = session.hostId === userId;
+  const isParticipant = session.participants.length > 0;
+  const isGroupMember = (session.group?.members.length ?? 0) > 0;
+
+  if (!isHost && !isParticipant && !isGroupMember) {
+    throw forbidden('No tenés acceso a esta juntada', 'SESSION_ACCESS_DENIED');
+  }
+
+  return {
+    session,
+    isHost,
+    isGroupAdmin: session.group?.members[0]?.role === GroupRole.admin,
+  };
+}
+
+export async function listUserSessions(userId: string, query: ListSessionsQuery) {
+  if (query.groupId) {
+    await assertGroupMember(userId, query.groupId);
+  }
+
+  const userGroupIds = (
+    await prisma.groupMember.findMany({
+      where: { userId },
+      select: { groupId: true },
+    })
+  ).map((g) => g.groupId);
+
+  const sessions = await prisma.session.findMany({
+    where: {
+      ...(query.groupId ? { groupId: query.groupId } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      OR: [
+        { hostId: userId },
+        { participants: { some: { userId } } },
+        ...(userGroupIds.length > 0 ? [{ groupId: { in: userGroupIds } }] : []),
+      ],
+    },
+    include: {
+      group: { select: { id: true, name: true } },
+      host: { select: USER_SUMMARY_SELECT },
+      participants: {
+        include: { user: { select: USER_SUMMARY_SELECT } },
+        orderBy: { respondedAt: 'asc' },
+      },
+      proposals: {
+        include: {
+          game: { select: { id: true, name: true, thumbnailUrl: true } },
+          votes: { select: { userId: true, rank: true } },
+        },
+      },
+    },
+    orderBy: { scheduledAt: 'desc' },
+  });
+
+  return sessions.map((session) => {
+    const scoredProposals = sortScoredProposals(
+      session.proposals.map((p) => ({
+        id: p.id,
+        createdAt: p.createdAt,
+        game: p.game,
+        ...scoreProposalVotes(p.votes, session.votingMode, userId),
+      })),
+    );
+
+    const top = scoredProposals[0] ?? null;
+
+    return {
+      id: session.id,
+      groupId: session.groupId,
+      groupName: session.group?.name ?? 'Invitación directa',
+      title: session.title,
+      scheduledAt: session.scheduledAt,
+      location: session.location,
+      status: session.status,
+      votingMode: session.votingMode,
+      maxVotesPerUser: session.maxVotesPerUser,
+      inviteToken: session.inviteToken,
+      host: session.host,
+      confirmedCount: session.participants.filter((p) => p.rsvp === RsvpStatus.going)
+        .length,
+      proposalsCount: session.proposals.length,
+      topProposal: top
+        ? {
+            id: top.id,
+            game: top.game,
+            voteCount: top.voteCount,
+            score: top.score,
+          }
+        : null,
+      participants: session.participants.map((p) => ({
+        rsvp: p.rsvp,
+        respondedAt: p.respondedAt,
+        user: p.user,
+      })),
+    };
+  });
+}
+
+export async function createSession(userId: string, input: CreateSessionInput) {
+  let participantCreates: { userId: string; rsvp: RsvpStatus }[] = [
+    { userId, rsvp: RsvpStatus.going },
+  ];
+
+  if (input.groupId) {
+    await assertGroupMember(userId, input.groupId);
+    const members = await prisma.groupMember.findMany({
+      where: { groupId: input.groupId },
+      select: { userId: true },
+    });
+    participantCreates = members.map((m) => ({
+      userId: m.userId,
+      rsvp: m.userId === userId ? RsvpStatus.going : RsvpStatus.maybe,
+    }));
+  }
+
+  const normalizedMaxVotes =
+    input.votingMode === VotingMode.single_choice
+      ? 1
+      : input.votingMode === VotingMode.ranked_top3
+        ? 3
+        : input.maxVotesPerUser;
+
+  const created = await prisma.session.create({
+    data: {
+      groupId: input.groupId ?? null,
+      hostId: userId,
+      title: input.title,
+      scheduledAt: input.scheduledAt,
+      location: input.location ?? null,
+      status: input.status,
+      votingMode: input.votingMode,
+      maxVotesPerUser: normalizedMaxVotes,
+      inviteToken: generateSessionInviteToken(),
+      participants: {
+        createMany: {
+          data: participantCreates,
+          skipDuplicates: true,
+        },
+      },
+    },
+    select: { id: true },
+  });
+
+  return getSessionDetail(userId, created.id);
+}
+
+export async function joinSessionByInviteToken(
+  userId: string,
+  inviteToken: string,
+  rsvp: RsvpStatus,
+) {
+  const session = await prisma.session.findUnique({
+    where: { inviteToken },
+    select: { id: true, status: true },
+  });
+
+  if (!session) {
+    throw notFound(
+      'Link de invitación de juntada inválido o inexistente',
+      'SESSION_INVITE_NOT_FOUND',
+    );
+  }
+
+  if (session.status === SessionStatus.cancelled) {
+    throw badRequest('Esta juntada fue cancelada', undefined, 'SESSION_CANCELLED');
+  }
+
+  await prisma.sessionParticipant.upsert({
+    where: {
+      sessionId_userId: { sessionId: session.id, userId },
+    },
+    update: {
+      rsvp,
+      respondedAt: new Date(),
+    },
+    create: {
+      sessionId: session.id,
+      userId,
+      rsvp,
+    },
+  });
+
+  return getSessionDetail(userId, session.id);
+}
+
+export async function getSessionDetail(userId: string, sessionId: string) {
+  await assertSessionAccess(userId, sessionId);
+
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+    include: {
+      group: { select: { id: true, name: true } },
+      host: { select: USER_SUMMARY_SELECT },
+      participants: {
+        include: { user: { select: USER_SUMMARY_SELECT } },
+        orderBy: { respondedAt: 'asc' },
+      },
+      proposals: {
+        include: {
+          game: { include: GAME_WITH_MECHANICS_INCLUDE },
+          proposer: { select: USER_SUMMARY_SELECT },
+          votes: { select: { userId: true, rank: true } },
+        },
+      },
+    },
+  });
+
+  if (!session) {
+    throw notFound('Juntada no encontrada', 'SESSION_NOT_FOUND');
+  }
+
+  const goingIds = session.participants
+    .filter((p) => p.rsvp === RsvpStatus.going)
+    .map((p) => p.userId);
+  const allParticipantIds = session.participants.map((p) => p.userId);
+  const proposalGameIds = session.proposals.map((p) => p.gameId);
+
+  const ownedRows =
+    proposalGameIds.length > 0 && allParticipantIds.length > 0
+      ? await prisma.userGame.findMany({
+          where: {
+            gameId: { in: proposalGameIds },
+            userId: { in: allParticipantIds },
+            status: UserGameStatus.owned,
+          },
+          include: { user: { select: USER_SUMMARY_SELECT } },
+        })
+      : [];
+
+  const goingIdSet = new Set(goingIds);
+  const ownersByGame = new Map<string, OwnerSummary[]>();
+  const fallbackOwnersByGame = new Map<string, OwnerSummary[]>();
+
+  for (const row of ownedRows) {
+    const fallbackList = fallbackOwnersByGame.get(row.gameId) ?? [];
+    fallbackList.push(row.user);
+    fallbackOwnersByGame.set(row.gameId, fallbackList);
+
+    if (goingIdSet.has(row.userId)) {
+      const goingList = ownersByGame.get(row.gameId) ?? [];
+      goingList.push(row.user);
+      ownersByGame.set(row.gameId, goingList);
+    }
+  }
+
+  const scoredProposals = sortScoredProposals(
+    session.proposals.map((p) => {
+      const voteMetrics = scoreProposalVotes(p.votes, session.votingMode, userId);
+      const owners =
+        ownersByGame.get(p.gameId) ?? fallbackOwnersByGame.get(p.gameId) ?? [];
+
+      return {
+        id: p.id,
+        note: p.note,
+        createdAt: p.createdAt,
+        game: formatGame(p.game),
+        proposedBy: p.proposer,
+        owners,
+        ...voteMetrics,
+      };
+    }),
+  );
+
+  const userVotesUsed = scoredProposals.filter((p) => p.userVoted).length;
+
+  return {
+    id: session.id,
+    groupId: session.groupId,
+    groupName: session.group?.name ?? 'Invitación directa',
+    title: session.title,
+    scheduledAt: session.scheduledAt,
+    location: session.location,
+    status: session.status,
+    votingMode: session.votingMode,
+    maxVotesPerUser: session.maxVotesPerUser,
+    inviteToken: session.inviteToken,
+    host: session.host,
+    confirmedCount: goingIds.length,
+    userVotesUsed,
+    votesRemaining: Math.max(0, session.maxVotesPerUser - userVotesUsed),
+    participants: session.participants.map((p) => ({
+      rsvp: p.rsvp,
+      respondedAt: p.respondedAt,
+      user: p.user,
+    })),
+    proposals: scoredProposals,
+  };
+}
+
+export async function updateParticipantRsvp(
+  userId: string,
+  sessionId: string,
+  rsvp: RsvpStatus,
+) {
+  await assertSessionAccess(userId, sessionId);
+
+  await prisma.sessionParticipant.upsert({
+    where: { sessionId_userId: { sessionId, userId } },
+    update: { rsvp, respondedAt: new Date() },
+    create: { sessionId, userId, rsvp },
+  });
+
+  return getSessionDetail(userId, sessionId);
+}
+
+export async function updateSessionStatus(
+  userId: string,
+  sessionId: string,
+  status: SessionStatus,
+) {
+  const { isHost, isGroupAdmin } = await assertSessionAccess(userId, sessionId);
+  if (!isHost && !isGroupAdmin) {
+    throw forbidden(
+      'Solo el anfitrión o un administrador del grupo puede cambiar el estado de la juntada',
+      'SESSION_HOST_REQUIRED',
+    );
+  }
+
+  await prisma.session.update({
+    where: { id: sessionId },
+    data: { status },
+  });
+
+  return getSessionDetail(userId, sessionId);
+}
+
+export async function getSessionCombinedPool(
+  userId: string,
+  sessionId: string,
+  query: SessionPoolQuery,
+) {
+  await assertSessionAccess(userId, sessionId);
+
+  const goingParticipants = await prisma.sessionParticipant.findMany({
+    where: { sessionId, rsvp: RsvpStatus.going },
+    select: { userId: true },
+  });
+
+  const goingUserIds = goingParticipants.map((p) => p.userId);
+  const confirmedCount = goingUserIds.length;
+
+  if (confirmedCount === 0) {
+    return {
+      confirmedCount: 0,
+      onlyCompatible: query.onlyCompatible ?? true,
+      includeExpansions: query.includeExpansions ?? false,
+      total: 0,
+      items: [],
+    };
+  }
+
+  const onlyCompatible = query.onlyCompatible ?? true;
+  const includeExpansions = query.includeExpansions ?? false;
+
+  const gameWhere: Prisma.GameWhereInput = {};
+  const gameAnd: Prisma.GameWhereInput[] = [];
+
+  if (!includeExpansions) {
+    gameWhere.isExpansion = false;
+  }
+
+  if (onlyCompatible) {
+    gameAnd.push(
+      { minPlayers: { lte: confirmedCount } },
+      { maxPlayers: { gte: confirmedCount } },
+    );
+  }
+
+  if (query.q) {
+    gameWhere.name = { contains: query.q, mode: 'insensitive' };
+  }
+
+  if (query.maxPlayingTime !== undefined) {
+    gameWhere.playingTimeMinutes = { lte: query.maxPlayingTime };
+  }
+
+  if (query.minWeight !== undefined || query.maxWeight !== undefined) {
+    gameWhere.weight = {
+      ...(query.minWeight !== undefined ? { gte: query.minWeight } : {}),
+      ...(query.maxWeight !== undefined ? { lte: query.maxWeight } : {}),
+    };
+  }
+
+  if (query.mechanicIds && query.mechanicIds.length > 0) {
+    for (const mechanicId of query.mechanicIds) {
+      gameAnd.push({
+        mechanics: { some: { mechanicId } },
+      });
+    }
+  }
+
+  if (gameAnd.length > 0) {
+    gameWhere.AND = gameAnd;
+  }
+
+  const [ownedRows, existingProposals] = await Promise.all([
+    prisma.userGame.findMany({
+      where: {
+        userId: { in: goingUserIds },
+        status: UserGameStatus.owned,
+        game: gameWhere,
+      },
+      include: {
+        user: { select: USER_SUMMARY_SELECT },
+        game: { include: GAME_WITH_MECHANICS_INCLUDE },
+      },
+    }),
+    prisma.sessionProposal.findMany({
+      where: { sessionId },
+      select: { gameId: true },
+    }),
+  ]);
+
+  const proposedGameIds = new Set(existingProposals.map((p) => p.gameId));
+  const items = aggregateCombinedPool(
+    ownedRows.map((row) => ({
+      user: row.user,
+      game: formatGame(row.game),
+    })),
+    proposedGameIds,
+    {
+      confirmedCount,
+      onlyCompatible,
+      includeExpansions,
+    },
+  );
+
+  return {
+    confirmedCount,
+    onlyCompatible,
+    includeExpansions,
+    total: items.length,
+    items,
+  };
+}
+
+export async function proposeGameForSession(
+  userId: string,
+  sessionId: string,
+  input: CreateProposalInput,
+) {
+  const { session } = await assertSessionAccess(userId, sessionId);
+
+  if (
+    session.status === SessionStatus.locked ||
+    session.status === SessionStatus.completed ||
+    session.status === SessionStatus.cancelled
+  ) {
+    throw badRequest(
+      'La votación está cerrada y no se pueden agregar nuevas propuestas',
+      undefined,
+      'SESSION_VOTING_CLOSED',
+    );
+  }
+
+  const game = await prisma.game.findUnique({
+    where: { id: input.gameId },
+    select: { id: true },
+  });
+
+  if (!game) {
+    throw notFound('El juego seleccionado no existe en el catálogo', 'GAME_NOT_FOUND');
+  }
+
+  const existing = await prisma.sessionProposal.findUnique({
+    where: {
+      sessionId_gameId: { sessionId, gameId: input.gameId },
+    },
+    select: { id: true },
+  });
+
+  if (existing) {
+    throw conflict('Ese juego ya fue propuesto en esta juntada', 'DUPLICATE_PROPOSAL');
+  }
+
+  await prisma.sessionProposal.create({
+    data: {
+      sessionId,
+      gameId: input.gameId,
+      proposedBy: userId,
+      note: input.note ?? null,
+    },
+  });
+
+  return getSessionDetail(userId, sessionId);
+}
+
+export async function deleteSessionProposal(
+  userId: string,
+  sessionId: string,
+  proposalId: string,
+) {
+  const { session, isHost, isGroupAdmin } = await assertSessionAccess(userId, sessionId);
+
+  if (session.status !== SessionStatus.voting && session.status !== SessionStatus.planning) {
+    throw badRequest(
+      'No se pueden eliminar propuestas cuando la votación está cerrada',
+      undefined,
+      'SESSION_VOTING_CLOSED',
+    );
+  }
+
+  const proposal = await prisma.sessionProposal.findFirst({
+    where: { id: proposalId, sessionId },
+    select: { id: true, proposedBy: true },
+  });
+
+  if (!proposal) {
+    throw notFound('Propuesta no encontrada', 'PROPOSAL_NOT_FOUND');
+  }
+
+  if (proposal.proposedBy !== userId && !isHost && !isGroupAdmin) {
+    throw forbidden(
+      'Solo quien propuso el juego o el anfitrión pueden quitar la propuesta',
+      'PROPOSAL_DELETE_FORBIDDEN',
+    );
+  }
+
+  await prisma.sessionProposal.delete({ where: { id: proposal.id } });
+  return getSessionDetail(userId, sessionId);
+}
+
+export async function castVote(
+  userId: string,
+  sessionId: string,
+  proposalId: string,
+  rank: number,
+) {
+  const { session } = await assertSessionAccess(userId, sessionId);
+
+  if (session.status !== SessionStatus.voting && session.status !== SessionStatus.planning) {
+    throw badRequest(
+      'La votación está cerrada para esta juntada',
+      undefined,
+      'SESSION_VOTING_CLOSED',
+    );
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const proposal = await tx.sessionProposal.findFirst({
+      where: { id: proposalId, sessionId },
+      select: { id: true },
+    });
+
+    if (!proposal) {
+      throw notFound('Propuesta no encontrada en esta juntada', 'PROPOSAL_NOT_FOUND');
+    }
+
+    if (session.votingMode === VotingMode.ranked_top3) {
+      if (rank < 1 || rank > 3) {
+        throw badRequest('En modo Top 3 el rank debe ser 1, 2 o 3', undefined, 'INVALID_RANK');
+      }
+
+      // Free the same rank on any other proposal of this session
+      await tx.sessionVote.deleteMany({
+        where: {
+          userId,
+          rank,
+          proposalId: { not: proposalId },
+          proposal: { sessionId },
+        },
+      });
+
+      await tx.sessionVote.upsert({
+        where: { proposalId_userId: { proposalId, userId } },
+        update: { rank },
+        create: { proposalId, userId, rank },
+      });
+      return;
+    }
+
+    if (session.votingMode === VotingMode.single_choice) {
+      await tx.sessionVote.deleteMany({
+        where: {
+          userId,
+          proposalId: { not: proposalId },
+          proposal: { sessionId },
+        },
+      });
+
+      await tx.sessionVote.upsert({
+        where: { proposalId_userId: { proposalId, userId } },
+        update: { rank: 1 },
+        create: { proposalId, userId, rank: 1 },
+      });
+      return;
+    }
+
+    // multi_vote
+    const existingVote = await tx.sessionVote.findUnique({
+      where: { proposalId_userId: { proposalId, userId } },
+    });
+
+    if (existingVote) {
+      return;
+    }
+
+    const currentVoteCount = await tx.sessionVote.count({
+      where: {
+        userId,
+        proposal: { sessionId },
+      },
+    });
+
+    if (currentVoteCount >= session.maxVotesPerUser) {
+      throw badRequest(
+        `Ya usaste el máximo de ${session.maxVotesPerUser} votos en esta juntada`,
+        { maxVotesPerUser: session.maxVotesPerUser },
+        'MAX_VOTES_REACHED',
+      );
+    }
+
+    await tx.sessionVote.create({
+      data: { proposalId, userId, rank: 1 },
+    });
+  });
+
+  return getSessionDetail(userId, sessionId);
+}
+
+export async function removeVote(
+  userId: string,
+  sessionId: string,
+  proposalId: string,
+) {
+  const { session } = await assertSessionAccess(userId, sessionId);
+
+  if (session.status !== SessionStatus.voting && session.status !== SessionStatus.planning) {
+    throw badRequest(
+      'La votación está cerrada para esta juntada',
+      undefined,
+      'SESSION_VOTING_CLOSED',
+    );
+  }
+
+  await prisma.sessionVote.deleteMany({
+    where: {
+      proposalId,
+      userId,
+      proposal: { sessionId },
+    },
+  });
+
+  return getSessionDetail(userId, sessionId);
+}
