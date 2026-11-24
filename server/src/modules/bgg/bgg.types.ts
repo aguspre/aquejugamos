@@ -1,3 +1,5 @@
+import type { BggSyncQuotaStatus } from './bgg.guard.js';
+
 export interface BggCollectionItem {
   bggId: number;
   name: string;
@@ -43,4 +45,5 @@ export interface BggSyncSummary {
   addedToLibrary: number;
   updatedInLibrary: number;
   syncedAt: Date;
+  quota: BggSyncQuotaStatus;
 }

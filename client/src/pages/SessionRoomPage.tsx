@@ -21,8 +21,9 @@ import {
   Vote,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import { ApiError } from '../api/client';
+import { GuestLockedView } from '../components/auth/GuestLockedView';
 import { GameCard } from '../components/game/GameCard';
 import { GameDetailDrawer } from '../components/game/GameDetailDrawer';
 import { FilterChipBar } from '../components/ui/FilterChipBar';
@@ -30,6 +31,7 @@ import { OwnerAvatarStack } from '../components/ui/OwnerAvatarStack';
 import { PlayerCountBadge } from '../components/ui/PlayerCountBadge';
 import { WeightIndicator } from '../components/ui/WeightIndicator';
 import { useAppState } from '../context/AppStateContext';
+import { useAuth } from '../context/AuthContext';
 import type {
   Game,
   GameFilterState,
@@ -70,6 +72,12 @@ export function SessionRoomPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const {
+    isAuthenticated,
+    isGuestSession,
+    loading: authLoading,
+    openAuthModal,
+  } = useAuth();
+  const {
     currentUser,
     sessions,
     loadSessionDetail,
@@ -97,8 +105,16 @@ export function SessionRoomPage() {
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [busyAction, setBusyAction] = useState(false);
 
+  const inviteTokenParam = searchParams.get('invite');
+  const shouldRedirectInviteToWelcome = Boolean(
+    !authLoading && !isAuthenticated && inviteTokenParam,
+  );
+  const canLoadRoom = Boolean(
+    !authLoading && (isAuthenticated || isGuestSession) && !shouldRedirectInviteToWelcome,
+  );
+
   const fetchRoomData = useCallback(async () => {
-    if (!id) return;
+    if (!id || !canLoadRoom) return;
     setErrorMsg(null);
 
     try {
@@ -124,12 +140,21 @@ export function SessionRoomPage() {
     } finally {
       setLoading(false);
     }
-  }, [id, searchParams, setSearchParams, joinSessionByToken, loadSessionDetail, loadSessionPool]);
+  }, [
+    id,
+    canLoadRoom,
+    searchParams,
+    setSearchParams,
+    joinSessionByToken,
+    loadSessionDetail,
+    loadSessionPool,
+  ]);
 
   useEffect(() => {
+    if (!canLoadRoom) return;
     setLoading(true);
     void fetchRoomData();
-  }, [fetchRoomData]);
+  }, [canLoadRoom, fetchRoomData]);
 
   const poolMechanics = useMemo(
     () =>
@@ -156,7 +181,34 @@ export function SessionRoomPage() {
     );
   }, [sessionPool, poolFilters, smartPlayerFilter, confirmedCount]);
 
-  if (loading && !session) {
+  if (shouldRedirectInviteToWelcome && inviteTokenParam) {
+    return (
+      <Navigate
+        to={`/welcome?sessionInvite=${encodeURIComponent(inviteTokenParam)}`}
+        replace
+      />
+    );
+  }
+
+  if (!authLoading && !isAuthenticated && !isGuestSession) {
+    return (
+      <GuestLockedView
+        eyebrow="Sala de juntada"
+        pageTitle="Acceso restringido"
+        pageSubtitle="Esta juntada requiere una cuenta o un link de invitación válido."
+        icon={CalendarDays}
+        lockTitle="Necesitás una invitación o cuenta para entrar"
+        lockDescription="Si un amigo te invitó, abrí su link de invitación para ingresar con tu nombre como invitado y votar. También podés iniciar sesión con tu cuenta."
+        benefits={[
+          'Confirmá asistencia (Voy / Tal vez / No voy) en las juntadas de tu grupo.',
+          'Votá qué juegos salen a la mesa en tiempo real.',
+          'Con cuenta registrada además podés proponer juegos y sumar tu ludoteca.',
+        ]}
+      />
+    );
+  }
+
+  if ((authLoading || loading) && !session) {
     return (
       <div className="flex items-center justify-center py-20 text-ink-muted gap-2">
         <Loader2 className="h-5 w-5 animate-spin text-forest-600" aria-hidden="true" />
@@ -265,25 +317,27 @@ export function SessionRoomPage() {
         </Link>
 
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleCopyInvite}
-            className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-border bg-surface px-3 text-xs font-semibold text-ink hover:border-border-strong transition"
-          >
-            {copiedInvite ? (
-              <>
-                <Check className="h-3.5 w-3.5 text-forest-600" aria-hidden="true" />
-                <span className="text-forest-700">¡Link copiado!</span>
-              </>
-            ) : (
-              <>
-                <Link2 className="h-3.5 w-3.5 text-ink-muted" aria-hidden="true" />
-                <span>Copiar link</span>
-              </>
-            )}
-          </button>
+          {isAuthenticated && (
+            <button
+              type="button"
+              onClick={handleCopyInvite}
+              className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-border bg-surface px-3 text-xs font-semibold text-ink hover:border-border-strong transition"
+            >
+              {copiedInvite ? (
+                <>
+                  <Check className="h-3.5 w-3.5 text-forest-600" aria-hidden="true" />
+                  <span className="text-forest-700">¡Link copiado!</span>
+                </>
+              ) : (
+                <>
+                  <Link2 className="h-3.5 w-3.5 text-ink-muted" aria-hidden="true" />
+                  <span>Copiar link</span>
+                </>
+              )}
+            </button>
+          )}
 
-          {isHost && (
+          {isAuthenticated && isHost && (
             <button
               type="button"
               disabled={busyAction}
@@ -525,11 +579,23 @@ export function SessionRoomPage() {
               </div>
               <button
                 type="button"
-                onClick={() => handleLogWinnerPlay(winners[0]?.game.id)}
-                className="shrink-0 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-terracotta-500 px-4.5 text-sm font-bold text-white shadow-xs hover:bg-terracotta-600 transition"
+                onClick={() =>
+                  isAuthenticated
+                    ? handleLogWinnerPlay(winners[0]?.game.id)
+                    : openAuthModal('signin')
+                }
+                className={`shrink-0 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4.5 text-sm font-bold shadow-xs transition ${
+                  isAuthenticated
+                    ? 'bg-terracotta-500 text-white hover:bg-terracotta-600'
+                    : 'border border-border-strong bg-surface text-ink-muted hover:bg-canvas-subtle'
+                }`}
               >
-                <Dices className="h-4 w-4" aria-hidden="true" />
-                Registrar partida jugada
+                {isAuthenticated ? (
+                  <Dices className="h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <Lock className="h-4 w-4" aria-hidden="true" />
+                )}
+                {isAuthenticated ? 'Registrar partida jugada' : 'Iniciá sesión para registrar'}
               </button>
             </div>
           ) : (
@@ -715,10 +781,18 @@ export function SessionRoomPage() {
                           {isLocked ? (
                             <button
                               type="button"
-                              onClick={() => handleLogWinnerPlay(proposal.game.id)}
+                              onClick={() =>
+                                isAuthenticated
+                                  ? handleLogWinnerPlay(proposal.game.id)
+                                  : openAuthModal('signin')
+                              }
                               className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-border bg-canvas px-3.5 text-xs font-bold text-ink hover:border-forest-600 hover:text-forest-700 transition"
                             >
-                              <Dices className="h-3.5 w-3.5" aria-hidden="true" />
+                              {isAuthenticated ? (
+                                <Dices className="h-3.5 w-3.5" aria-hidden="true" />
+                              ) : (
+                                <Lock className="h-3.5 w-3.5 text-ink-subtle" aria-hidden="true" />
+                              )}
                               Registrar partida
                             </button>
                           ) : session.votingMode === 'ranked_top3' ? (

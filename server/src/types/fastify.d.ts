@@ -7,11 +7,19 @@ declare module '@fastify/jwt' {
       sub: string;
       email: string;
       firebaseUid?: string;
+      isGuest?: boolean;
+      guestGroupId?: string;
+      guestGroupName?: string;
+      guestSessionId?: string;
     };
     user: {
       sub: string;
       email: string;
       firebaseUid?: string;
+      isGuest?: boolean;
+      guestGroupId?: string;
+      guestGroupName?: string;
+      guestSessionId?: string;
     };
   }
 }

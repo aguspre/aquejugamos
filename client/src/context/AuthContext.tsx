@@ -16,10 +16,19 @@ import {
   useEffect,
   useMemo,
   useState,
+  type Context,
   type ReactNode,
 } from "react";
-import { ApiError } from "../api/client";
-import { authApi, type AuthUserResponse } from "../api/endpoints";
+import {
+  ApiError,
+  getStoredGuestToken,
+  setStoredGuestToken,
+} from "../api/client";
+import {
+  authApi,
+  type AuthUserResponse,
+  type GuestScope,
+} from "../api/endpoints";
 import { firebaseAuth, googleProvider } from "../lib/firebase";
 
 export type BackendUserProfile = AuthUserResponse;
@@ -33,13 +42,23 @@ interface SignUpInput {
   displayName: string;
 }
 
+interface GuestJoinInput {
+  displayName: string;
+  groupInviteCode?: string;
+  sessionInviteToken?: string;
+}
+
 interface AuthContextValue {
   firebaseUser: FirebaseUser | null;
   backendUser: BackendUserProfile | null;
   backendSyncStatus: BackendSyncStatus;
   backendSyncError: string | null;
   loading: boolean;
+  /** True solo cuando el usuario inició sesión con cuenta registrada (Firebase). */
   isAuthenticated: boolean;
+  /** True cuando el usuario ingresó como invitado con nombre mediante link de invitación. */
+  isGuestSession: boolean;
+  guestScope: GuestScope | null;
   authModalOpen: boolean;
   authModalTab: AuthModalTab;
   openAuthModal: (tab?: AuthModalTab) => void;
@@ -47,6 +66,10 @@ interface AuthContextValue {
   signInWithGoogle: () => Promise<void>;
   signInWithEmail: (email: string, password: string) => Promise<void>;
   signUpWithEmail: (input: SignUpInput) => Promise<void>;
+  enterAsInvitedGuest: (
+    input: GuestJoinInput,
+  ) => Promise<{ targetSessionId: string | null; guestScope: GuestScope }>;
+  exitGuestSession: () => void;
   sendPasswordReset: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
   refreshBackendSync: () => Promise<void>;
@@ -57,7 +80,14 @@ interface AuthContextValue {
   getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
 }
 
-const AuthContext = createContext<AuthContextValue | null>(null);
+const AuthContext: Context<AuthContextValue | null> =
+  (import.meta.hot?.data?.AuthContext as
+    | Context<AuthContextValue | null>
+    | undefined) ?? createContext<AuthContextValue | null>(null);
+
+if (import.meta.hot) {
+  import.meta.hot.data.AuthContext = AuthContext;
+}
 
 export function formatFirebaseAuthError(error: unknown): string {
   if (error instanceof FirebaseError) {
@@ -103,15 +133,22 @@ export function formatFirebaseAuthError(error: unknown): string {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
-  const [backendUser, setBackendUser] = useState<BackendUserProfile | null>(
-    null,
-  );
+  const [registeredUser, setRegisteredUser] =
+    useState<BackendUserProfile | null>(null);
+  const [guestUser, setGuestUser] = useState<BackendUserProfile | null>(null);
+  const [guestScope, setGuestScope] = useState<GuestScope | null>(null);
   const [backendSyncStatus, setBackendSyncStatus] =
     useState<BackendSyncStatus>("idle");
   const [backendSyncError, setBackendSyncError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<AuthModalTab>("signin");
+
+  const clearGuestState = useCallback(() => {
+    setStoredGuestToken(null);
+    setGuestUser(null);
+    setGuestScope(null);
+  }, []);
 
   const syncWithBackend = useCallback(
     async (
@@ -124,7 +161,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const token = await user.getIdToken(forceRefreshToken);
         const { user: synced } = await authApi.sync(overrides, token);
-        setBackendUser(synced);
+        setRegisteredUser(synced);
         setBackendSyncStatus("synced");
       } catch (error) {
         setBackendSyncStatus("offline");
@@ -141,21 +178,57 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
+    let active = true;
+
     const unsubscribe = onAuthStateChanged(firebaseAuth, (user) => {
+      if (!active) return;
+
       setFirebaseUser(user);
-      setLoading(false);
 
       if (user) {
+        clearGuestState();
+        setLoading(false);
         void syncWithBackend(user);
-      } else {
-        setBackendUser(null);
-        setBackendSyncStatus("idle");
-        setBackendSyncError(null);
+        return;
       }
+
+      setRegisteredUser(null);
+      setBackendSyncStatus("idle");
+      setBackendSyncError(null);
+
+      const storedGuestToken = getStoredGuestToken();
+      if (!storedGuestToken) {
+        setGuestUser(null);
+        setGuestScope(null);
+        setLoading(false);
+        return;
+      }
+
+      void authApi
+        .me()
+        .then((res) => {
+          if (!active) return;
+          if (res.isGuest) {
+            setGuestUser(res.user);
+            setGuestScope(res.guestScope ?? null);
+          } else {
+            clearGuestState();
+          }
+        })
+        .catch(() => {
+          if (!active) return;
+          clearGuestState();
+        })
+        .finally(() => {
+          if (active) setLoading(false);
+        });
     });
 
-    return () => unsubscribe();
-  }, [syncWithBackend]);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [syncWithBackend, clearGuestState]);
 
   const openAuthModal = useCallback((tab: AuthModalTab = "signin") => {
     setAuthModalTab(tab);
@@ -168,9 +241,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signInWithGoogle = useCallback(async () => {
     const result = await signInWithPopup(firebaseAuth, googleProvider);
+    clearGuestState();
     await syncWithBackend(result.user);
     setAuthModalOpen(false);
-  }, [syncWithBackend]);
+  }, [syncWithBackend, clearGuestState]);
 
   const signInWithEmail = useCallback(
     async (email: string, password: string) => {
@@ -179,10 +253,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         email.trim(),
         password,
       );
+      clearGuestState();
       await syncWithBackend(result.user);
       setAuthModalOpen(false);
     },
-    [syncWithBackend],
+    [syncWithBackend, clearGuestState],
   );
 
   const signUpWithEmail = useCallback(
@@ -198,6 +273,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await firebaseUpdateProfile(result.user, { displayName: trimmedName });
       }
 
+      clearGuestState();
+
       // Refrescamos el token para que contenga el displayName recién guardado
       await syncWithBackend(
         result.user,
@@ -206,19 +283,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       );
       setAuthModalOpen(false);
     },
-    [syncWithBackend],
+    [syncWithBackend, clearGuestState],
   );
+
+  const enterAsInvitedGuest = useCallback(async (input: GuestJoinInput) => {
+    const res = await authApi.guestJoin({
+      displayName: input.displayName.trim(),
+      groupInviteCode: input.groupInviteCode,
+      sessionInviteToken: input.sessionInviteToken,
+    });
+
+    setStoredGuestToken(res.token);
+    setGuestUser(res.user);
+    setGuestScope(res.guestScope);
+    setAuthModalOpen(false);
+
+    return {
+      targetSessionId: res.guestScope.targetSessionId ?? null,
+      guestScope: res.guestScope,
+    };
+  }, []);
+
+  const exitGuestSession = useCallback(() => {
+    clearGuestState();
+  }, [clearGuestState]);
 
   const sendPasswordReset = useCallback(async (email: string) => {
     await sendPasswordResetEmail(firebaseAuth, email.trim());
   }, []);
 
   const signOut = useCallback(async () => {
-    await firebaseSignOut(firebaseAuth);
-    setBackendUser(null);
+    if (firebaseAuth.currentUser) {
+      await firebaseSignOut(firebaseAuth);
+    }
+    clearGuestState();
+    setRegisteredUser(null);
     setBackendSyncStatus("idle");
     setBackendSyncError(null);
-  }, []);
+  }, [clearGuestState]);
 
   const refreshBackendSync = useCallback(async () => {
     if (!firebaseAuth.currentUser) return;
@@ -240,7 +342,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const { user: updated } = await authApi.updateMe(patch);
-      setBackendUser(updated);
+      setRegisteredUser(updated);
       setBackendSyncStatus("synced");
       setBackendSyncError(null);
     },
@@ -252,6 +354,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return firebaseAuth.currentUser.getIdToken(forceRefresh);
   }, []);
 
+  const isAuthenticated = firebaseUser !== null;
+  const isGuestSession = !isAuthenticated && guestUser !== null;
+  const backendUser = isAuthenticated ? registeredUser : guestUser;
+
   const value = useMemo<AuthContextValue>(
     () => ({
       firebaseUser,
@@ -259,7 +365,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       backendSyncStatus,
       backendSyncError,
       loading,
-      isAuthenticated: firebaseUser !== null,
+      isAuthenticated,
+      isGuestSession,
+      guestScope,
       authModalOpen,
       authModalTab,
       openAuthModal,
@@ -267,6 +375,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signInWithGoogle,
       signInWithEmail,
       signUpWithEmail,
+      enterAsInvitedGuest,
+      exitGuestSession,
       sendPasswordReset,
       signOut,
       refreshBackendSync,
@@ -279,6 +389,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       backendSyncStatus,
       backendSyncError,
       loading,
+      isAuthenticated,
+      isGuestSession,
+      guestScope,
       authModalOpen,
       authModalTab,
       openAuthModal,
@@ -286,6 +399,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signInWithGoogle,
       signInWithEmail,
       signUpWithEmail,
+      enterAsInvitedGuest,
+      exitGuestSession,
       sendPasswordReset,
       signOut,
       refreshBackendSync,

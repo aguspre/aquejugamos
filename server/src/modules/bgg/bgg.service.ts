@@ -3,16 +3,30 @@ import { getEnv } from '../../config/env.js';
 import { prisma } from '../../config/prisma.js';
 import { badRequest, notFound } from '../../utils/errors.js';
 import { getBggClient } from './bgg.client.js';
-import type { BggImportBody } from './bgg.schemas.js';
+import { getBggGuard, type BggSyncQuotaStatus } from './bgg.guard.js';
+import { bggUsernameSchema, type BggImportBody } from './bgg.schemas.js';
 import type { BggGameDetails, BggSyncSummary } from './bgg.types.js';
 
 function decimalToNumber(value: Prisma.Decimal | null | undefined): number | null {
   return value !== null && value !== undefined ? Number(value) : null;
 }
 
+export async function getUserBggSyncQuota(userId: string): Promise<BggSyncQuotaStatus> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, bggUsername: true, lastBggSyncAt: true },
+  });
+
+  if (!user) {
+    throw notFound('Usuario no encontrado', 'USER_NOT_FOUND');
+  }
+
+  return getBggGuard().getSyncQuota(user.id, user.lastBggSyncAt, user.bggUsername);
+}
+
 export async function upsertGamesFromBgg(
   bggIds: number[],
-  options: { forceRefresh?: boolean } = {},
+  options: { forceRefresh?: boolean; onUpstreamFetch?: () => void } = {},
 ): Promise<{
   gamesByBggId: Map<number, { id: string; bggId: number }>;
   metadataRefreshed: number;
@@ -25,6 +39,10 @@ export async function upsertGamesFromBgg(
   const env = getEnv();
   const ttlMs = env.BGG_CACHE_TTL_DAYS * 24 * 60 * 60 * 1000;
   const staleCutoff = new Date(Date.now() - ttlMs);
+  // Incluso con forceRefresh, nunca re-descargar fichas actualizadas recientemente (24h por defecto)
+  const minForceRefreshCutoff = new Date(
+    Date.now() - env.BGG_MIN_FORCE_REFRESH_HOURS * 60 * 60 * 1000,
+  );
 
   const existingGames = await prisma.game.findMany({
     where: { bggId: { in: uniqueIds } },
@@ -34,15 +52,18 @@ export async function upsertGamesFromBgg(
   const existingByBggId = new Map(existingGames.map((g) => [g.bggId, g]));
 
   const idsToFetch = uniqueIds.filter((bggId) => {
-    if (options.forceRefresh) return true;
     const existing = existingByBggId.get(bggId);
     if (!existing || !existing.bggSyncedAt) return true;
+    if (options.forceRefresh) {
+      return existing.bggSyncedAt < minForceRefreshCutoff;
+    }
     return existing.bggSyncedAt < staleCutoff;
   });
 
   let metadataRefreshed = 0;
 
   if (idsToFetch.length > 0) {
+    options.onUpstreamFetch?.();
     const detailsList = await getBggClient().fetchThingsByIds(idsToFetch);
     await persistBggGameDetails(detailsList);
     metadataRefreshed = detailsList.length;
@@ -141,15 +162,15 @@ export async function syncUserBggCollection(
 ): Promise<BggSyncSummary> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, bggUsername: true },
+    select: { id: true, bggUsername: true, lastBggSyncAt: true },
   });
 
   if (!user) {
     throw notFound('Usuario no encontrado', 'USER_NOT_FOUND');
   }
 
-  const bggUsername = bggUsernameInput?.trim() || user.bggUsername?.trim();
-  if (!bggUsername) {
+  const rawUsername = bggUsernameInput?.trim() || user.bggUsername?.trim();
+  if (!rawUsername) {
     throw badRequest(
       'Debés indicar un nombre de usuario de BoardGameGeek para sincronizar',
       undefined,
@@ -157,86 +178,120 @@ export async function syncUserBggCollection(
     );
   }
 
-  const collectionItems = await getBggClient().fetchUserCollection(bggUsername);
-  const collectionBggIds = collectionItems.map((item) => item.bggId);
+  const parsedUsername = bggUsernameSchema.safeParse(rawUsername);
+  if (!parsedUsername.success) {
+    throw badRequest(
+      parsedUsername.error.issues[0]?.message ?? 'Usuario de BoardGameGeek inválido',
+      undefined,
+      'INVALID_BGG_USERNAME',
+    );
+  }
+  const bggUsername = parsedUsername.data;
 
-  const { gamesByBggId, metadataRefreshed } = await upsertGamesFromBgg(collectionBggIds, {
-    forceRefresh,
-  });
+  const guard = getBggGuard();
+  const syncSlot = guard.acquireSyncSlot(
+    userId,
+    bggUsername,
+    user.lastBggSyncAt,
+    user.bggUsername,
+  );
 
-  const resolvedGameIds = collectionItems
-    .map((item) => gamesByBggId.get(item.bggId)?.id)
-    .filter((id): id is string => Boolean(id));
+  try {
+    const env = getEnv();
+    const rawCollectionItems = await getBggClient().fetchUserCollection(bggUsername);
+    const collectionItems = rawCollectionItems.slice(0, env.BGG_MAX_COLLECTION_ITEMS);
+    const collectionBggIds = collectionItems.map((item) => item.bggId);
 
-  const existingLibrary = await prisma.userGame.findMany({
-    where: {
-      userId,
-      gameId: { in: resolvedGameIds },
-    },
-    select: { gameId: true },
-  });
+    const { gamesByBggId, metadataRefreshed } = await upsertGamesFromBgg(collectionBggIds, {
+      forceRefresh,
+    });
 
-  const existingGameIdSet = new Set(existingLibrary.map((entry) => entry.gameId));
-  let addedToLibrary = 0;
-  let updatedInLibrary = 0;
+    const resolvedGameIds = collectionItems
+      .map((item) => gamesByBggId.get(item.bggId)?.id)
+      .filter((id): id is string => Boolean(id));
 
-  for (const item of collectionItems) {
-    const game = gamesByBggId.get(item.bggId);
-    if (!game) continue;
-
-    const ratingDecimal =
-      item.personalRating !== null
-        ? new Prisma.Decimal(item.personalRating.toFixed(2))
-        : undefined;
-
-    await prisma.userGame.upsert({
+    const existingLibrary = await prisma.userGame.findMany({
       where: {
-        userId_gameId: {
+        userId,
+        gameId: { in: resolvedGameIds },
+      },
+      select: { gameId: true },
+    });
+
+    const existingGameIdSet = new Set(existingLibrary.map((entry) => entry.gameId));
+    let addedToLibrary = 0;
+    let updatedInLibrary = 0;
+
+    for (const item of collectionItems) {
+      const game = gamesByBggId.get(item.bggId);
+      if (!game) continue;
+
+      const ratingDecimal =
+        item.personalRating !== null
+          ? new Prisma.Decimal(item.personalRating.toFixed(2))
+          : undefined;
+
+      await prisma.userGame.upsert({
+        where: {
+          userId_gameId: {
+            userId,
+            gameId: game.id,
+          },
+        },
+        update: {
+          status: UserGameStatus.owned,
+          ...(ratingDecimal !== undefined ? { personalRating: ratingDecimal } : {}),
+        },
+        create: {
           userId,
           gameId: game.id,
+          status: UserGameStatus.owned,
+          personalRating: ratingDecimal ?? null,
         },
-      },
-      update: {
-        status: UserGameStatus.owned,
-        ...(ratingDecimal !== undefined ? { personalRating: ratingDecimal } : {}),
-      },
-      create: {
-        userId,
-        gameId: game.id,
-        status: UserGameStatus.owned,
-        personalRating: ratingDecimal ?? null,
+      });
+
+      if (existingGameIdSet.has(game.id)) {
+        updatedInLibrary += 1;
+      } else {
+        addedToLibrary += 1;
+      }
+    }
+
+    const syncedAt = new Date();
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        bggUsername,
+        lastBggSyncAt: syncedAt,
       },
     });
 
-    if (existingGameIdSet.has(game.id)) {
-      updatedInLibrary += 1;
-    } else {
-      addedToLibrary += 1;
-    }
-  }
+    syncSlot.release(true);
 
-  const syncedAt = new Date();
-
-  await prisma.user.update({
-    where: { id: userId },
-    data: {
+    return {
       bggUsername,
-      lastBggSyncAt: syncedAt,
-    },
-  });
-
-  return {
-    bggUsername,
-    totalInBgg: collectionItems.length,
-    metadataRefreshed,
-    addedToLibrary,
-    updatedInLibrary,
-    syncedAt,
-  };
+      totalInBgg: collectionItems.length,
+      metadataRefreshed,
+      addedToLibrary,
+      updatedInLibrary,
+      syncedAt,
+      quota: guard.getSyncQuota(userId, syncedAt, bggUsername),
+    };
+  } catch (error) {
+    syncSlot.release(false);
+    throw error;
+  }
 }
 
 export async function searchBggCatalog(userId: string, query: string, exact = false) {
-  const results = (await getBggClient().searchGames(query, exact)).slice(0, 30);
+  const guard = getBggGuard();
+  guard.assertSearchRateLimit(userId);
+
+  const { results: rawResults } = await guard.getOrFetchSearch(query, exact, () =>
+    getBggClient().searchGames(query, exact),
+  );
+  const results = rawResults.slice(0, 30);
   if (results.length === 0) {
     return [];
   }
@@ -279,7 +334,9 @@ export async function importGameToLibrary(
   bggId: number,
   input: BggImportBody,
 ) {
-  const { gamesByBggId } = await upsertGamesFromBgg([bggId]);
+  const { gamesByBggId } = await upsertGamesFromBgg([bggId], {
+    onUpstreamFetch: () => getBggGuard().assertUpstreamImportRateLimit(userId),
+  });
   const game = gamesByBggId.get(bggId);
 
   if (!game) {

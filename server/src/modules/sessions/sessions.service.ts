@@ -73,7 +73,17 @@ function formatGame(game: GameWithMechanics): PoolGameInput {
   };
 }
 
-export async function assertSessionAccess(userId: string, sessionId: string) {
+export interface SessionAccessScope {
+  isGuest?: boolean;
+  guestGroupId?: string;
+  guestSessionId?: string;
+}
+
+export async function assertSessionAccess(
+  userId: string,
+  sessionId: string,
+  scope?: SessionAccessScope,
+) {
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
     include: {
@@ -100,39 +110,60 @@ export async function assertSessionAccess(userId: string, sessionId: string) {
   const isHost = session.hostId === userId;
   const isParticipant = session.participants.length > 0;
   const isGroupMember = (session.group?.members.length ?? 0) > 0;
+  const isInvitedGuest = Boolean(
+    scope?.isGuest &&
+      ((scope.guestGroupId && session.groupId === scope.guestGroupId) ||
+        (scope.guestSessionId && session.id === scope.guestSessionId)),
+  );
 
-  if (!isHost && !isParticipant && !isGroupMember) {
+  if (!isHost && !isParticipant && !isGroupMember && !isInvitedGuest) {
     throw forbidden('No tenés acceso a esta juntada', 'SESSION_ACCESS_DENIED');
   }
 
   return {
     session,
     isHost,
-    isGroupAdmin: session.group?.members[0]?.role === GroupRole.admin,
+    isGroupAdmin: !scope?.isGuest && session.group?.members[0]?.role === GroupRole.admin,
   };
 }
 
-export async function listUserSessions(userId: string, query: ListSessionsQuery) {
-  if (query.groupId) {
-    await assertGroupMember(userId, query.groupId);
-  }
+export async function listUserSessions(
+  userId: string,
+  query: ListSessionsQuery,
+  scope?: SessionAccessScope,
+) {
+  let accessOr: Prisma.SessionWhereInput[];
 
-  const userGroupIds = (
-    await prisma.groupMember.findMany({
-      where: { userId },
-      select: { groupId: true },
-    })
-  ).map((g) => g.groupId);
+  if (scope?.isGuest) {
+    accessOr = [
+      { participants: { some: { userId } } },
+      ...(scope.guestGroupId ? [{ groupId: scope.guestGroupId }] : []),
+      ...(scope.guestSessionId ? [{ id: scope.guestSessionId }] : []),
+    ];
+  } else {
+    if (query.groupId) {
+      await assertGroupMember(userId, query.groupId);
+    }
+
+    const userGroupIds = (
+      await prisma.groupMember.findMany({
+        where: { userId },
+        select: { groupId: true },
+      })
+    ).map((g) => g.groupId);
+
+    accessOr = [
+      { hostId: userId },
+      { participants: { some: { userId } } },
+      ...(userGroupIds.length > 0 ? [{ groupId: { in: userGroupIds } }] : []),
+    ];
+  }
 
   const sessions = await prisma.session.findMany({
     where: {
-      ...(query.groupId ? { groupId: query.groupId } : {}),
+      ...(query.groupId && !scope?.isGuest ? { groupId: query.groupId } : {}),
       ...(query.status ? { status: query.status } : {}),
-      OR: [
-        { hostId: userId },
-        { participants: { some: { userId } } },
-        ...(userGroupIds.length > 0 ? [{ groupId: { in: userGroupIds } }] : []),
-      ],
+      OR: accessOr,
     },
     include: {
       group: { select: { id: true, name: true } },
@@ -282,8 +313,12 @@ export async function joinSessionByInviteToken(
   return getSessionDetail(userId, session.id);
 }
 
-export async function getSessionDetail(userId: string, sessionId: string) {
-  await assertSessionAccess(userId, sessionId);
+export async function getSessionDetail(
+  userId: string,
+  sessionId: string,
+  scope?: SessionAccessScope,
+) {
+  await assertSessionAccess(userId, sessionId, scope);
 
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
@@ -390,8 +425,9 @@ export async function updateParticipantRsvp(
   userId: string,
   sessionId: string,
   rsvp: RsvpStatus,
+  scope?: SessionAccessScope,
 ) {
-  await assertSessionAccess(userId, sessionId);
+  await assertSessionAccess(userId, sessionId, scope);
 
   await prisma.sessionParticipant.upsert({
     where: { sessionId_userId: { sessionId, userId } },
@@ -399,7 +435,7 @@ export async function updateParticipantRsvp(
     create: { sessionId, userId, rsvp },
   });
 
-  return getSessionDetail(userId, sessionId);
+  return getSessionDetail(userId, sessionId, scope);
 }
 
 export async function updateSessionStatus(
@@ -427,8 +463,9 @@ export async function getSessionCombinedPool(
   userId: string,
   sessionId: string,
   query: SessionPoolQuery,
+  scope?: SessionAccessScope,
 ) {
-  await assertSessionAccess(userId, sessionId);
+  await assertSessionAccess(userId, sessionId, scope);
 
   const goingParticipants = await prisma.sessionParticipant.findMany({
     where: { sessionId, rsvp: RsvpStatus.going },
@@ -537,8 +574,9 @@ export async function proposeGameForSession(
   userId: string,
   sessionId: string,
   input: CreateProposalInput,
+  scope?: SessionAccessScope,
 ) {
-  const { session } = await assertSessionAccess(userId, sessionId);
+  const { session } = await assertSessionAccess(userId, sessionId, scope);
 
   if (
     session.status === SessionStatus.locked ||
@@ -572,6 +610,14 @@ export async function proposeGameForSession(
     throw conflict('Ese juego ya fue propuesto en esta juntada', 'DUPLICATE_PROPOSAL');
   }
 
+  if (scope?.isGuest) {
+    await prisma.sessionParticipant.upsert({
+      where: { sessionId_userId: { sessionId, userId } },
+      update: {},
+      create: { sessionId, userId, rsvp: RsvpStatus.going },
+    });
+  }
+
   await prisma.sessionProposal.create({
     data: {
       sessionId,
@@ -581,15 +627,20 @@ export async function proposeGameForSession(
     },
   });
 
-  return getSessionDetail(userId, sessionId);
+  return getSessionDetail(userId, sessionId, scope);
 }
 
 export async function deleteSessionProposal(
   userId: string,
   sessionId: string,
   proposalId: string,
+  scope?: SessionAccessScope,
 ) {
-  const { session, isHost, isGroupAdmin } = await assertSessionAccess(userId, sessionId);
+  const { session, isHost, isGroupAdmin } = await assertSessionAccess(
+    userId,
+    sessionId,
+    scope,
+  );
 
   if (session.status !== SessionStatus.voting && session.status !== SessionStatus.planning) {
     throw badRequest(
@@ -616,7 +667,7 @@ export async function deleteSessionProposal(
   }
 
   await prisma.sessionProposal.delete({ where: { id: proposal.id } });
-  return getSessionDetail(userId, sessionId);
+  return getSessionDetail(userId, sessionId, scope);
 }
 
 export async function castVote(
@@ -624,8 +675,9 @@ export async function castVote(
   sessionId: string,
   proposalId: string,
   rank: number,
+  scope?: SessionAccessScope,
 ) {
-  const { session } = await assertSessionAccess(userId, sessionId);
+  const { session } = await assertSessionAccess(userId, sessionId, scope);
 
   if (session.status !== SessionStatus.voting && session.status !== SessionStatus.planning) {
     throw badRequest(
@@ -636,6 +688,14 @@ export async function castVote(
   }
 
   await prisma.$transaction(async (tx) => {
+    if (scope?.isGuest) {
+      await tx.sessionParticipant.upsert({
+        where: { sessionId_userId: { sessionId, userId } },
+        update: {},
+        create: { sessionId, userId, rsvp: RsvpStatus.going },
+      });
+    }
+
     const proposal = await tx.sessionProposal.findFirst({
       where: { id: proposalId, sessionId },
       select: { id: true },
@@ -714,15 +774,16 @@ export async function castVote(
     });
   });
 
-  return getSessionDetail(userId, sessionId);
+  return getSessionDetail(userId, sessionId, scope);
 }
 
 export async function removeVote(
   userId: string,
   sessionId: string,
   proposalId: string,
+  scope?: SessionAccessScope,
 ) {
-  const { session } = await assertSessionAccess(userId, sessionId);
+  const { session } = await assertSessionAccess(userId, sessionId, scope);
 
   if (session.status !== SessionStatus.voting && session.status !== SessionStatus.planning) {
     throw badRequest(
@@ -740,5 +801,5 @@ export async function removeVote(
     },
   });
 
-  return getSessionDetail(userId, sessionId);
+  return getSessionDetail(userId, sessionId, scope);
 }

@@ -16,11 +16,23 @@ export class ApiError extends Error {
   }
 }
 
-function getFallbackJwtToken(): string | null {
+export function getStoredGuestToken(): string | null {
   try {
     return localStorage.getItem(TOKEN_STORAGE_KEY);
   } catch {
     return null;
+  }
+}
+
+export function setStoredGuestToken(token: string | null): void {
+  try {
+    if (token) {
+      localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    } else {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // ignore storage errors
   }
 }
 
@@ -61,7 +73,7 @@ export async function apiRequest<T>(
   if (!token && firebaseAuth.currentUser) {
     token = await firebaseAuth.currentUser.getIdToken();
   } else if (!token) {
-    token = getFallbackJwtToken();
+    token = getStoredGuestToken();
   }
 
   if (token) {

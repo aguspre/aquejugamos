@@ -1,0 +1,470 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1100" width="1600" height="1100" fill="none">
+  <defs>
+    <!-- Room warm ambient gradient -->
+    <linearGradient id="wallBg" x1="0" y1="0" x2="1600" y2="1100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#13261E"/>
+      <stop offset="48%" stop-color="#1D3329"/>
+      <stop offset="100%" stop-color="#28231D"/>
+    </linearGradient>
+
+    <!-- Warm pendant light glow -->
+    <radialGradient id="lampGlowMain" cx="1160" cy="340" r="680" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFD996" stop-opacity="0.34"/>
+      <stop offset="40%" stop-color="#E59A45" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#13261E" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="lampGlowLeft" cx="460" cy="240" r="520" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F6C177" stop-opacity="0.18"/>
+      <stop offset="55%" stop-color="#C85A32" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#13261E" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Walnut shelf wood gradients -->
+    <linearGradient id="woodShelf" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6B4A34"/>
+      <stop offset="45%" stop-color="#4F3524"/>
+      <stop offset="100%" stop-color="#352216"/>
+    </linearGradient>
+
+    <linearGradient id="woodUpright" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#3B271A"/>
+      <stop offset="45%" stop-color="#5B3D2A"/>
+      <stop offset="100%" stop-color="#2E1D13"/>
+    </linearGradient>
+
+    <!-- Foreground gaming table surface -->
+    <linearGradient id="tableTop" x1="800" y1="720" x2="1450" y2="1100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#5E3E29"/>
+      <stop offset="50%" stop-color="#4B3120"/>
+      <stop offset="100%" stop-color="#321F14"/>
+    </linearGradient>
+
+    <linearGradient id="tableEdge" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2A1910"/>
+      <stop offset="50%" stop-color="#3F281A"/>
+      <stop offset="100%" stop-color="#24150D"/>
+    </linearGradient>
+
+    <!-- Pendant dome gradient -->
+    <linearGradient id="brassDome" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#E3A554"/>
+      <stop offset="50%" stop-color="#B86B2B"/>
+      <stop offset="100%" stop-color="#6F3717"/>
+    </linearGradient>
+
+    <linearGradient id="shelfShadow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0A130F" stop-opacity="0.58"/>
+      <stop offset="100%" stop-color="#0A130F" stop-opacity="0"/>
+    </linearGradient>
+
+    <filter id="softBlur" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="24"/>
+    </filter>
+
+    <filter id="tableShadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0A0E0C" flood-opacity="0.45"/>
+    </filter>
+
+    <filter id="paperGrain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.75" numOctaves="2" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+    </filter>
+  </defs>
+
+  <!-- Base Room Wall -->
+  <rect width="1600" height="1100" fill="url(#wallBg)"/>
+
+  <!-- Subtle vertical wood paneling behind shelves -->
+  <g opacity="0.16" stroke="#0C1712" stroke-width="2">
+    <line x1="120" y1="0" x2="120" y2="1100"/>
+    <line x1="240" y1="0" x2="240" y2="1100"/>
+    <line x1="360" y1="0" x2="360" y2="1100"/>
+    <line x1="480" y1="0" x2="480" y2="1100"/>
+    <line x1="600" y1="0" x2="600" y2="1100"/>
+    <line x1="720" y1="0" x2="720" y2="1100"/>
+    <line x1="840" y1="0" x2="840" y2="1100"/>
+    <line x1="960" y1="0" x2="960" y2="1100"/>
+    <line x1="1080" y1="0" x2="1080" y2="1100"/>
+    <line x1="1200" y1="0" x2="1200" y2="1100"/>
+    <line x1="1320" y1="0" x2="1320" y2="1100"/>
+    <line x1="1440" y1="0" x2="1440" y2="1100"/>
+  </g>
+
+  <!-- Recessed Bookshelf Back Cavity -->
+  <rect x="64" y="56" width="1472" height="820" rx="8" fill="#17241E"/>
+
+  <!-- Back shadow inside cubbies -->
+  <rect x="64" y="56" width="1472" height="36" fill="url(#shelfShadow)"/>
+  <rect x="64" y="316" width="1472" height="36" fill="url(#shelfShadow)"/>
+  <rect x="64" y="580" width="1472" height="36" fill="url(#shelfShadow)"/>
+
+  <!-- ================= SHELF 1 (TOP ROW: y=66 to y=292) ================= -->
+  <g id="shelf-row-1">
+    <!-- Left Bay (x: 96..518) -->
+    <!-- Upright boxes -->
+    <g>
+      <rect x="108" y="102" width="54" height="190" rx="4" fill="#2C6E54"/>
+      <rect x="108" y="102" width="10" height="190" fill="#1E4D3B" opacity="0.5"/>
+      <rect x="118" y="128" width="34" height="6" rx="3" fill="#F9EACA" opacity="0.8"/>
+      <circle cx="135" cy="192" r="14" stroke="#F9EACA" stroke-width="2.5" opacity="0.65"/>
+      <polygon points="135,181 144,197 126,197" fill="#C98223" opacity="0.85"/>
+    </g>
+    <g>
+      <rect x="166" y="114" width="46" height="178" rx="4" fill="#C85A32"/>
+      <rect x="166" y="114" width="8" height="178" fill="#8D391B" opacity="0.5"/>
+      <rect x="176" y="142" width="26" height="46" rx="3" fill="#FAF8F4" opacity="0.16"/>
+      <rect x="182" y="216" width="14" height="44" rx="2" fill="#F9EACA" opacity="0.72"/>
+    </g>
+    <g>
+      <rect x="216" y="96" width="60" height="196" rx="4" fill="#1F3B4D"/>
+      <rect x="216" y="96" width="10" height="196" fill="#132632" opacity="0.55"/>
+      <polygon points="246,134 262,144 262,162 246,172 230,162 230,144" fill="#E3A554" opacity="0.82"/>
+      <rect x="230" y="192" width="32" height="5" rx="2.5" fill="#FAF8F4" opacity="0.6"/>
+      <rect x="236" y="206" width="20" height="4" rx="2" fill="#FAF8F4" opacity="0.38"/>
+    </g>
+    <!-- Horizontal stacked boxes -->
+    <g>
+      <rect x="292" y="244" width="208" height="48" rx="5" fill="#C98223"/>
+      <rect x="292" y="244" width="208" height="9" fill="#E3A554" opacity="0.45"/>
+      <rect x="314" y="262" width="104" height="11" rx="4" fill="#FAF8F4" opacity="0.78"/>
+      <circle cx="468" cy="268" r="11" fill="#1F2421" opacity="0.35"/>
+
+      <rect x="304" y="196" width="192" height="46" rx="5" fill="#EAE4D9"/>
+      <rect x="304" y="196" width="28" height="46" rx="5" fill="#1E4D3B"/>
+      <rect x="348" y="213" width="96" height="10" rx="4" fill="#1F2421" opacity="0.7"/>
+      <rect x="456" y="209" width="24" height="18" rx="3" fill="#C85A32" opacity="0.85"/>
+
+      <rect x="318" y="152" width="174" height="42" rx="5" fill="#7A2E3A"/>
+      <rect x="336" y="168" width="84" height="8" rx="4" fill="#F9EACA" opacity="0.8"/>
+      <circle cx="458" cy="173" r="9" fill="#E3A554" opacity="0.85"/>
+    </g>
+
+    <!-- Center Bay (x: 546..1026) -->
+    <!-- Potted trailing plant on left of center bay -->
+    <g>
+      <path d="M582 238 L642 238 L632 292 L592 292 Z" fill="#C85A32"/>
+      <rect x="576" y="230" width="72" height="14" rx="4" fill="#AD4925"/>
+      <path d="M610 232 C590 202, 566 196, 560 170 C582 174, 604 192, 610 228 Z" fill="#3B7A57"/>
+      <path d="M614 232 C626 196, 650 178, 670 162 C658 190, 638 208, 616 232 Z" fill="#4E946C"/>
+      <path d="M610 230 C606 190, 612 162, 624 140 C630 166, 624 198, 614 230 Z" fill="#2C6E54"/>
+      <path d="M634 238 C652 252, 658 278, 650 304" stroke="#3B7A57" stroke-width="5" stroke-linecap="round"/>
+      <ellipse cx="653" cy="272" rx="10" ry="6" transform="rotate(24 653 272)" fill="#4E946C"/>
+      <ellipse cx="648" cy="296" rx="9" ry="5" transform="rotate(-18 648 296)" fill="#3B7A57"/>
+    </g>
+
+    <!-- Center bay boxes -->
+    <g>
+      <rect x="684" y="100" width="58" height="192" rx="4" fill="#1D5B6E"/>
+      <rect x="698" y="128" width="30" height="30" rx="6" fill="#F9EACA" opacity="0.22"/>
+      <circle cx="713" cy="143" r="8" fill="#E3A554"/>
+      <rect x="706" y="176" width="14" height="84" rx="3" fill="#FAF8F4" opacity="0.72"/>
+
+      <rect x="746" y="122" width="44" height="170" rx="4" fill="#E6D5B8"/>
+      <rect x="746" y="122" width="44" height="24" rx="4" fill="#C85A32"/>
+      <rect x="762" y="166" width="12" height="92" rx="3" fill="#1F2421" opacity="0.65"/>
+
+      <rect x="794" y="92" width="66" height="200" rx="4" fill="#2A3E36"/>
+      <rect x="808" y="118" width="38" height="58" rx="4" stroke="#E3A554" stroke-width="2.5" opacity="0.78"/>
+      <polygon points="827,129 837,147 827,165 817,147" fill="#E3A554" opacity="0.82"/>
+      <rect x="814" y="196" width="26" height="6" rx="3" fill="#FAF8F4" opacity="0.65"/>
+
+      <rect x="864" y="114" width="52" height="178" rx="4" fill="#AD4925"/>
+      <circle cx="890" cy="154" r="14" fill="#F9EACA" opacity="0.8"/>
+      <circle cx="890" cy="154" r="6" fill="#AD4925"/>
+      <rect x="884" y="186" width="12" height="72" rx="3" fill="#F9EACA" opacity="0.7"/>
+
+      <!-- Slightly leaning box -->
+      <g transform="rotate(-7 952 290)">
+        <rect x="928" y="120" width="48" height="172" rx="4" fill="#C98223"/>
+        <rect x="938" y="144" width="28" height="10" rx="3" fill="#1F2421" opacity="0.55"/>
+        <rect x="945" y="172" width="14" height="84" rx="3" fill="#FAF8F4" opacity="0.78"/>
+      </g>
+    </g>
+
+    <!-- Right Bay (x: 1054..1504) -->
+    <g>
+      <rect x="1072" y="236" width="224" height="56" rx="5" fill="#1E4D3B"/>
+      <rect x="1096" y="258" width="124" height="12" rx="4" fill="#F9EACA" opacity="0.82"/>
+      <polygon points="1264,250 1278,264 1264,278 1250,264" fill="#E3A554"/>
+
+      <rect x="1084" y="184" width="206" height="50" rx="5" fill="#D47448"/>
+      <rect x="1104" y="203" width="110" height="11" rx="4" fill="#FAF8F4" opacity="0.85"/>
+      <circle cx="1256" cy="209" r="10" stroke="#FAF8F4" stroke-width="2.5" opacity="0.8"/>
+
+      <rect x="1102" y="138" width="176" height="44" rx="5" fill="#2A4A5B"/>
+      <rect x="1120" y="155" width="96" height="9" rx="4" fill="#F9EACA" opacity="0.78"/>
+
+      <!-- Upright big boxes at far right -->
+      <rect x="1312" y="96" width="64" height="196" rx="4" fill="#8C3B2B"/>
+      <rect x="1326" y="122" width="36" height="48" rx="4" fill="#F9EACA" opacity="0.22"/>
+      <rect x="1337" y="190" width="14" height="72" rx="3" fill="#F9EACA" opacity="0.78"/>
+
+      <rect x="1380" y="108" width="52" height="184" rx="4" fill="#3B6E5C"/>
+      <circle cx="1406" cy="148" r="15" fill="#E3A554" opacity="0.85"/>
+      <rect x="1399" y="180" width="14" height="78" rx="3" fill="#FAF8F4" opacity="0.7"/>
+
+      <rect x="1436" y="124" width="54" height="168" rx="4" fill="#EAE4D9"/>
+      <rect x="1436" y="124" width="54" height="28" rx="4" fill="#1F3044"/>
+      <rect x="1456" y="172" width="14" height="84" rx="3" fill="#1F2421" opacity="0.65"/>
+    </g>
+  </g>
+
+  <!-- ================= SHELF 2 (MIDDLE ROW: y=316 to y=556) ================= -->
+  <g id="shelf-row-2">
+    <!-- Left Bay -->
+    <g>
+      <rect x="108" y="496" width="218" height="60" rx="5" fill="#234353"/>
+      <rect x="132" y="519" width="126" height="12" rx="4" fill="#F9EACA" opacity="0.82"/>
+      <circle cx="294" cy="526" r="12" fill="#C85A32"/>
+
+      <rect x="116" y="446" width="204" height="48" rx="5" fill="#C85A32"/>
+      <rect x="138" y="464" width="112" height="10" rx="4" fill="#FAF8F4" opacity="0.8"/>
+
+      <rect x="130" y="402" width="180" height="42" rx="5" fill="#38664E"/>
+      <rect x="148" y="418" width="96" height="9" rx="4" fill="#F9EACA" opacity="0.76"/>
+
+      <rect x="342" y="362" width="56" height="194" rx="4" fill="#C98223"/>
+      <polygon points="370,394 384,412 370,430 356,412" fill="#1F2421" opacity="0.5"/>
+      <rect x="363" y="452" width="14" height="74" rx="3" fill="#FAF8F4" opacity="0.82"/>
+
+      <rect x="402" y="378" width="48" height="178" rx="4" fill="#EAE4D9"/>
+      <rect x="402" y="378" width="48" height="22" rx="4" fill="#2C6E54"/>
+      <rect x="420" y="418" width="12" height="104" rx="3" fill="#1F2421" opacity="0.62"/>
+
+      <rect x="454" y="358" width="52" height="198" rx="4" fill="#5D3A58"/>
+      <circle cx="480" cy="402" r="14" stroke="#F9EACA" stroke-width="2.5" opacity="0.75"/>
+      <rect x="473" y="434" width="14" height="92" rx="3" fill="#F9EACA" opacity="0.7"/>
+    </g>
+
+    <!-- Center Bay (Hero visual focal boxes illuminated by lamp) -->
+    <g>
+      <rect x="564" y="354" width="66" height="202" rx="4" fill="#1E4D3B"/>
+      <rect x="578" y="382" width="38" height="44" rx="4" fill="#E3A554" opacity="0.88"/>
+      <rect x="589" y="446" width="16" height="84" rx="3" fill="#FAF8F4" opacity="0.8"/>
+
+      <rect x="634" y="370" width="54" height="186" rx="4" fill="#D96B43"/>
+      <circle cx="661" cy="410" r="16" fill="#FAF8F4" opacity="0.24"/>
+      <circle cx="661" cy="410" r="8" fill="#FAF8F4" opacity="0.85"/>
+      <rect x="654" y="444" width="14" height="84" rx="3" fill="#FAF8F4" opacity="0.8"/>
+
+      <rect x="692" y="356" width="60" height="200" rx="4" fill="#1B3A4B"/>
+      <polygon points="722,388 738,398 738,416 722,426 706,416 706,398" fill="#52B788" opacity="0.88"/>
+      <rect x="715" y="446" width="14" height="84" rx="3" fill="#F9EACA" opacity="0.78"/>
+
+      <!-- Featured face-out collector box! -->
+      <rect x="766" y="364" width="154" height="192" rx="6" fill="#233730" stroke="#E3A554" stroke-width="2" stroke-opacity="0.5"/>
+      <rect x="778" y="376" width="130" height="114" rx="4" fill="#172A23"/>
+      <!-- Mini tabletop hex graphic inside face-out cover -->
+      <g opacity="0.92">
+        <polygon points="843,396 864,408 864,432 843,444 822,432 822,408" fill="#C98223"/>
+        <polygon points="820,434 841,446 841,470 820,482 799,470 799,446" fill="#2C6E54"/>
+        <polygon points="866,434 887,446 887,470 866,482 845,470 845,446" fill="#C85A32"/>
+        <circle cx="843" cy="420" r="8" fill="#FAF8F4" opacity="0.88"/>
+      </g>
+      <rect x="794" y="506" width="98" height="10" rx="4" fill="#F9EACA" opacity="0.85"/>
+      <rect x="812" y="524" width="62" height="6" rx="3" fill="#E3A554" opacity="0.72"/>
+
+      <rect x="934" y="374" width="44" height="182" rx="4" fill="#E6D5B8"/>
+      <rect x="934" y="374" width="44" height="26" rx="4" fill="#8D391B"/>
+      <rect x="950" y="420" width="12" height="104" rx="3" fill="#1F2421" opacity="0.65"/>
+
+      <rect x="982" y="388" width="38" height="168" rx="4" fill="#3C6E71"/>
+      <rect x="995" y="418" width="12" height="108" rx="3" fill="#FAF8F4" opacity="0.72"/>
+    </g>
+
+    <!-- Right Bay -->
+    <g>
+      <rect x="1068" y="360" width="62" height="196" rx="4" fill="#C98223"/>
+      <rect x="1082" y="388" width="34" height="34" rx="6" fill="#1F2421" opacity="0.32"/>
+      <rect x="1092" y="442" width="14" height="84" rx="3" fill="#FAF8F4" opacity="0.85"/>
+
+      <rect x="1134" y="376" width="50" height="180" rx="4" fill="#2A5A46"/>
+      <circle cx="1159" cy="416" r="13" fill="#F9EACA" opacity="0.8"/>
+      <rect x="1152" y="448" width="14" height="80" rx="3" fill="#F9EACA" opacity="0.75"/>
+
+      <!-- Horizontal stack right bay -->
+      <rect x="1202" y="502" width="212" height="54" rx="5" fill="#7A2E3A"/>
+      <rect x="1224" y="523" width="118" height="11" rx="4" fill="#F9EACA" opacity="0.8"/>
+      <circle cx="1384" cy="529" r="10" fill="#E3A554"/>
+
+      <rect x="1212" y="454" width="196" height="46" rx="5" fill="#EAE4D9"/>
+      <rect x="1212" y="454" width="26" height="46" rx="5" fill="#C85A32"/>
+      <rect x="1252" y="472" width="104" height="10" rx="4" fill="#1F2421" opacity="0.68"/>
+
+      <rect x="1226" y="412" width="172" height="40" rx="5" fill="#1D5B6E"/>
+      <rect x="1246" y="427" width="94" height="8" rx="4" fill="#F9EACA" opacity="0.8"/>
+
+      <!-- Wooden dice tower silhouette -->
+      <g>
+        <path d="M1430 436 L1494 436 L1494 556 L1430 556 Z" fill="#5A3A26"/>
+        <rect x="1426" y="426" width="14" height="14" rx="2" fill="#6E4931"/>
+        <rect x="1454" y="426" width="16" height="14" rx="2" fill="#6E4931"/>
+        <rect x="1484" y="426" width="14" height="14" rx="2" fill="#6E4931"/>
+        <path d="M1444 512 C1444 500, 1480 500, 1480 512 L1480 556 L1444 556 Z" fill="#1B120C"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- ================= SHELF 3 (LOWER ROW: y=580 to y=824) ================= -->
+  <g id="shelf-row-3">
+    <rect x="110" y="624" width="58" height="200" rx="4" fill="#3B5249"/>
+    <rect x="172" y="640" width="46" height="184" rx="4" fill="#B55233"/>
+    <rect x="222" y="616" width="64" height="208" rx="4" fill="#233D4D"/>
+    <rect x="292" y="766" width="210" height="58" rx="5" fill="#C98223"/>
+    <rect x="304" y="714" width="190" height="50" rx="5" fill="#2C6E54"/>
+
+    <rect x="562" y="636" width="54" height="188" rx="4" fill="#7A2E3A"/>
+    <rect x="620" y="618" width="62" height="206" rx="4" fill="#EAE4D9"/>
+    <rect x="620" y="618" width="62" height="28" rx="4" fill="#1E4D3B"/>
+    <rect x="686" y="646" width="50" height="178" rx="4" fill="#1D5B6E"/>
+    <rect x="742" y="760" width="246" height="64" rx="5" fill="#46352E"/>
+    <rect x="758" y="704" width="222" height="54" rx="5" fill="#C85A32"/>
+  </g>
+
+  <!-- ================= SHELF STRUCTURE (WOOD FRAME & PLANKS) ================= -->
+  <!-- Horizontal shelves -->
+  <rect x="52" y="42" width="1496" height="24" rx="4" fill="url(#woodShelf)"/>
+  <rect x="52" y="292" width="1496" height="26" rx="3" fill="url(#woodShelf)"/>
+  <rect x="52" y="556" width="1496" height="26" rx="3" fill="url(#woodShelf)"/>
+  <rect x="52" y="824" width="1496" height="28" rx="3" fill="url(#woodShelf)"/>
+
+  <!-- Vertical dividers -->
+  <rect x="52" y="42" width="32" height="836" fill="url(#woodUpright)"/>
+  <rect x="522" y="42" width="26" height="836" fill="url(#woodUpright)"/>
+  <rect x="1030" y="42" width="26" height="836" fill="url(#woodUpright)"/>
+  <rect x="1516" y="42" width="32" height="836" fill="url(#woodUpright)"/>
+
+  <!-- Warm wood highlight lines on shelves -->
+  <g stroke="#9E7352" stroke-opacity="0.34" stroke-width="1.5">
+    <line x1="84" y1="293" x2="1516" y2="293"/>
+    <line x1="84" y1="557" x2="1516" y2="557"/>
+    <line x1="84" y1="825" x2="1516" y2="825"/>
+  </g>
+
+  <!-- ================= FOREGROUND WALNUT GAMING TABLE (LOWER RIGHT) ================= -->
+  <g filter="url(#tableShadow)">
+    <!-- Table top perspective slab -->
+    <polygon points="620,760 1600,670 1600,1100 500,1100" fill="url(#tableTop)"/>
+    <!-- Wood edge trim -->
+    <polygon points="620,760 1600,670 1600,688 614,778" fill="#785239" opacity="0.55"/>
+    <polygon points="500,1100 620,760 638,766 520,1100" fill="url(#tableEdge)"/>
+  </g>
+
+  <!-- Subtle wood grain lines on tabletop -->
+  <g stroke="#2C1B11" stroke-opacity="0.28" stroke-width="2">
+    <line x1="660" y1="820" x2="1600" y2="736"/>
+    <line x1="620" y1="900" x2="1600" y2="812"/>
+    <line x1="580" y1="990" x2="1600" y2="898"/>
+  </g>
+
+  <!-- ================= GAME PIECES ON TABLETOP ================= -->
+  <!-- Hexagonal Board Tiles Cluster (Catan / Cascadia style) -->
+  <g transform="translate(1060 800) rotate(-6)">
+    <!-- Tile 1: Forest -->
+    <polygon points="0,-54 47,-27 47,27 0,54 -47,27 -47,-27" fill="#2C6E54" stroke="#E7E1D7" stroke-width="3"/>
+    <polygon points="0,-24 16,6 -16,6" fill="#1E4D3B"/>
+    <polygon points="16,-6 28,16 4,16" fill="#163A2C"/>
+    <!-- Tile 2: Ochre Wheat -->
+    <polygon points="94,-54 141,-27 141,27 94,54 47,27 47,-27" fill="#C98223" stroke="#E7E1D7" stroke-width="3"/>
+    <circle cx="94" cy="0" r="18" fill="#F9EACA" opacity="0.28"/>
+    <circle cx="94" cy="0" r="12" fill="#FAF8F4" opacity="0.88"/>
+    <!-- Tile 3: Terracotta Clay -->
+    <polygon points="47,27 94,54 94,108 47,135 0,108 0,54" fill="#C85A32" stroke="#E7E1D7" stroke-width="3"/>
+    <rect x="33" y="68" width="28" height="16" rx="3" fill="#8D391B" opacity="0.55"/>
+    <!-- Tile 4: Slate Teal Sea -->
+    <polygon points="141,27 188,54 188,108 141,135 94,108 94,54" fill="#1D5B6E" stroke="#E7E1D7" stroke-width="3"/>
+    <path d="M116 78 Q128 70 140 78 T164 78" stroke="#D3E9EE" stroke-width="3" stroke-linecap="round" opacity="0.72"/>
+    <path d="M122 94 Q134 86 146 94 T162 94" stroke="#D3E9EE" stroke-width="2.5" stroke-linecap="round" opacity="0.5"/>
+    <!-- Tile 5: Warm Stone Mountain -->
+    <polygon points="188,-54 235,-27 235,27 188,54 141,27 141,-27" fill="#47555E" stroke="#E7E1D7" stroke-width="3"/>
+    <polygon points="188,-26 212,18 164,18" fill="#2E383F"/>
+    <polygon points="188,-26 196,-10 180,-10" fill="#FAF8F4" opacity="0.85"/>
+  </g>
+
+  <!-- Wooden Meeples standing on table -->
+  <!-- Terracotta Meeple -->
+  <g transform="translate(886 858)">
+    <ellipse cx="22" cy="58" rx="22" ry="7" fill="#140D08" opacity="0.48"/>
+    <path d="M22 4 C28 4 32 8 32 14 C32 18 29 21 26 23 L38 28 C41 29 42 33 40 36 L34 40 L39 55 C39 57 37 59 35 59 L27 59 L22 47 L17 59 L9 59 C7 59 5 57 5 55 L10 40 L4 36 C2 33 3 29 6 28 L18 23 C15 21 12 18 12 14 C12 8 16 4 22 4 Z" fill="#C85A32"/>
+    <path d="M22 6 C26 6 29 9 29 14" stroke="#F3C1A7" stroke-width="2" stroke-linecap="round" opacity="0.5"/>
+  </g>
+
+  <!-- Ochre Meeple -->
+  <g transform="translate(946 894) scale(0.92)">
+    <ellipse cx="22" cy="58" rx="22" ry="7" fill="#140D08" opacity="0.48"/>
+    <path d="M22 4 C28 4 32 8 32 14 C32 18 29 21 26 23 L38 28 C41 29 42 33 40 36 L34 40 L39 55 C39 57 37 59 35 59 L27 59 L22 47 L17 59 L9 59 C7 59 5 57 5 55 L10 40 L4 36 C2 33 3 29 6 28 L18 23 C15 21 12 18 12 14 C12 8 16 4 22 4 Z" fill="#E3A554"/>
+  </g>
+
+  <!-- Forest Meeple -->
+  <g transform="translate(838 906) scale(0.88)">
+    <ellipse cx="22" cy="58" rx="22" ry="7" fill="#140D08" opacity="0.48"/>
+    <path d="M22 4 C28 4 32 8 32 14 C32 18 29 21 26 23 L38 28 C41 29 42 33 40 36 L34 40 L39 55 C39 57 37 59 35 59 L27 59 L22 47 L17 59 L9 59 C7 59 5 57 5 55 L10 40 L4 36 C2 33 3 29 6 28 L18 23 C15 21 12 18 12 14 C12 8 16 4 22 4 Z" fill="#2C6E54"/>
+  </g>
+
+  <!-- Tabletop Dice (d6 & d20) -->
+  <!-- Cream d6 -->
+  <g transform="translate(1338 892) rotate(14)">
+    <rect x="4" y="8" width="54" height="54" rx="11" fill="#140D08" opacity="0.4"/>
+    <rect x="0" y="0" width="54" height="54" rx="11" fill="#FAF8F4" stroke="#D4CBBF" stroke-width="2"/>
+    <circle cx="15" cy="15" r="4.5" fill="#1E4D3B"/>
+    <circle cx="39" cy="15" r="4.5" fill="#1E4D3B"/>
+    <circle cx="27" cy="27" r="4.5" fill="#C85A32"/>
+    <circle cx="15" cy="39" r="4.5" fill="#1E4D3B"/>
+    <circle cx="39" cy="39" r="4.5" fill="#1E4D3B"/>
+  </g>
+
+  <!-- Terracotta d20 -->
+  <g transform="translate(1426 838)">
+    <ellipse cx="0" cy="40" rx="34" ry="11" fill="#140D08" opacity="0.42"/>
+    <polygon points="0,-38 35,-18 35,20 0,40 -35,20 -35,-18" fill="#C85A32" stroke="#F3C1A7" stroke-width="1.5" stroke-opacity="0.5"/>
+    <polygon points="0,-38 22,12 -22,12" fill="#DC6D44"/>
+    <polygon points="0,-38 35,-18 22,12" fill="#B24A24"/>
+    <polygon points="0,-38 -35,-18 -22,12" fill="#D4653C"/>
+    <polygon points="-22,12 22,12 0,40" fill="#9E3F1C"/>
+    <line x1="-22" y1="12" x2="-35" y2="20" stroke="#F3C1A7" stroke-opacity="0.35"/>
+    <line x1="22" y1="12" x2="35" y2="20" stroke="#F3C1A7" stroke-opacity="0.35"/>
+  </g>
+
+  <!-- Fanned Playing Cards -->
+  <g transform="translate(1156 972)">
+    <g transform="rotate(-18)">
+      <rect x="-42" y="-56" width="84" height="114" rx="9" fill="#FAF8F4" stroke="#D4CBBF" stroke-width="2"/>
+      <rect x="-32" y="-46" width="64" height="94" rx="5" fill="#1E4D3B" opacity="0.92"/>
+      <circle cx="0" cy="1" r="14" stroke="#E3A554" stroke-width="2"/>
+    </g>
+    <g transform="translate(36 -8) rotate(-3)">
+      <rect x="-42" y="-56" width="84" height="114" rx="9" fill="#FAF8F4" stroke="#D4CBBF" stroke-width="2"/>
+      <rect x="-32" y="-46" width="64" height="94" rx="5" fill="#F3EFE8"/>
+      <polygon points="0,-24 18,4 0,32 -18,4" fill="#C85A32" opacity="0.88"/>
+    </g>
+    <g transform="translate(76 2) rotate(13)">
+      <rect x="-42" y="-56" width="84" height="114" rx="9" fill="#FAF8F4" stroke="#D4CBBF" stroke-width="2"/>
+      <rect x="-32" y="-46" width="64" height="94" rx="5" fill="#2A4A5B" opacity="0.94"/>
+      <polygon points="0,-18 16,-9 16,9 0,18 -16,9 -16,-9" fill="#E3A554" opacity="0.9"/>
+    </g>
+  </g>
+
+  <!-- ================= WARM PENDANT LAMPS ================= -->
+  <!-- Lamp 1 (Main Right) -->
+  <g>
+    <line x1="1170" y1="0" x2="1170" y2="118" stroke="#191614" stroke-width="4"/>
+    <path d="M1086 178 C1094 128, 1130 112, 1170 112 C1210 112, 1246 128, 1254 178 Z" fill="url(#brassDome)"/>
+    <ellipse cx="1170" cy="178" rx="84" ry="15" fill="#FFE6B3"/>
+    <ellipse cx="1170" cy="178" rx="54" ry="9" fill="#FFF7E2"/>
+  </g>
+
+  <!-- Atmospheric Lighting Overlays -->
+  <rect width="1600" height="1100" fill="url(#lampGlowMain)"/>
+  <rect width="1600" height="1100" fill="url(#lampGlowLeft)"/>
+
+  <!-- Warm Floating Bokeh Motes -->
+  <g fill="#FFE4B5" filter="url(#softBlur)" opacity="0.22">
+    <circle cx="1170" cy="210" r="64"/>
+    <circle cx="960" cy="430" r="46"/>
+    <circle cx="1310" cy="610" r="52"/>
+  </g>
+
+  <!-- Subtle Film / Paper Grain for Editorial Warmth -->
+  <rect width="1600" height="1100" filter="url(#paperGrain)" opacity="0.045"/>
+</svg>

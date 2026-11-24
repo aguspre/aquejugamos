@@ -3,6 +3,7 @@ import {
   ArrowUpDown,
   Check,
   CheckCircle2,
+  Library,
   Loader2,
   Pencil,
   Plus,
@@ -14,11 +15,17 @@ import {
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api/client";
-import type { BggSearchResult } from "../api/endpoints";
+import {
+  bggApi,
+  type BggSearchResult,
+  type BggSyncQuota,
+} from "../api/endpoints";
+import { GuestLockedView } from "../components/auth/GuestLockedView";
 import { GameCard } from "../components/game/GameCard";
 import { GameDetailDrawer } from "../components/game/GameDetailDrawer";
 import { FilterChipBar } from "../components/ui/FilterChipBar";
 import { useAppState } from "../context/AppStateContext";
+import { useAuth } from "../context/AuthContext";
 import type { Game, GameFilterState, UserGameStatus } from "../types/domain";
 import { DEFAULT_GAME_FILTERS, filterGames } from "../utils/filterGames";
 
@@ -33,6 +40,7 @@ const STATUS_TABS: { id: "all" | UserGameStatus; label: string }[] = [
 ];
 
 export function LibraryPage() {
+  const { isAuthenticated, loading: authLoading } = useAuth();
   const {
     currentUser,
     isBootstrapping,
@@ -64,6 +72,7 @@ export function LibraryPage() {
   );
   const [syncPhase, setSyncPhase] = useState<SyncPhase>("idle");
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [bggQuota, setBggQuota] = useState<BggSyncQuota | null>(null);
   const [toastMessage, setToastMessage] = useState<{
     text: string;
     sessionId?: string;
@@ -84,6 +93,25 @@ export function LibraryPage() {
       setEditingBggUser(false);
     }
   }, [currentUser.bggUsername]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setBggQuota(null);
+      return;
+    }
+    let cancelled = false;
+    void bggApi
+      .getQuota()
+      .then(({ quota }) => {
+        if (!cancelled) setBggQuota(quota);
+      })
+      .catch(() => {
+        // Ignore quota fetch errors when backend is offline
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, lastBggSyncLabel]);
 
   const activeVotingSession =
     sessions.find((s) => s.status === "voting") ?? sessions[0];
@@ -133,6 +161,24 @@ export function LibraryPage() {
     ? (library.find((g) => g.id === selectedGameId) ?? null)
     : null;
 
+  if (!authLoading && !isAuthenticated) {
+    return (
+      <GuestLockedView
+        eyebrow="Tu colección personal"
+        pageTitle="Mi Ludoteca"
+        pageSubtitle="Importá tus juegos desde BoardGameGeek y combinalos con los de tus grupos."
+        icon={Library}
+        lockTitle="Tu ludoteca requiere una cuenta"
+        lockDescription="En modo invitado no es posible importar ni gestionar tu colección de juegos. Creá tu cuenta gratis para sincronizar con BGG y sumar tus cajas a las juntadas."
+        benefits={[
+          "Sincronizá automáticamente tu colección completa de BoardGameGeek.",
+          "Buscá e importá juegos individuales y clasificá lo que tenés o querés jugar.",
+          "Aportá tus juegos al pool combinado de tus grupos en cada juntada.",
+        ]}
+      />
+    );
+  }
+
   const handleBggSync = async (overrideUsername?: string) => {
     const targetUsername = (overrideUsername ?? bggUsernameInput).trim();
     if (!targetUsername) {
@@ -147,6 +193,9 @@ export function LibraryPage() {
     setSyncPhase("syncing");
     try {
       const summary = await syncWithBgg(targetUsername);
+      if (summary.quota) {
+        setBggQuota(summary.quota);
+      }
       setEditingBggUser(false);
       setSyncPhase("done");
       setToastMessage({
@@ -161,6 +210,12 @@ export function LibraryPage() {
           ? err.message
           : "Error al sincronizar con BoardGameGeek.",
       );
+      if (err instanceof ApiError && err.status === 429) {
+        void bggApi
+          .getQuota()
+          .then(({ quota }) => setBggQuota(quota))
+          .catch(() => {});
+      }
     }
   };
 
@@ -247,6 +302,19 @@ export function LibraryPage() {
               Última sincronización:{" "}
               <strong className="text-ink-muted">{lastBggSyncLabel}</strong>
             </span>
+            {bggQuota && (
+              <span
+                className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-bold num-tabular ${
+                  bggQuota.remainingToday === 0
+                    ? "border-terracotta-200 bg-terracotta-50 text-terracotta-700"
+                    : "border-border bg-canvas-subtle text-ink-muted"
+                }`}
+                title="Para cuidar la API de BoardGameGeek, podés actualizar tu biblioteca hasta 2 veces por día."
+              >
+                {bggQuota.remainingToday}/{bggQuota.dailyLimit}{" "}
+                {bggQuota.remainingToday === 1 ? "actualización hoy" : "actualizaciones hoy"}
+              </span>
+            )}
           </div>
           <h1 className="font-[var(--font-display)] text-3xl sm:text-4xl font-bold tracking-tight text-ink">
             Mi Ludoteca
@@ -274,11 +342,21 @@ export function LibraryPage() {
           <button
             type="button"
             onClick={() => void handleBggSync()}
-            disabled={syncPhase === "syncing"}
+            disabled={
+              syncPhase === "syncing" ||
+              (bggQuota !== null && bggQuota.remainingToday === 0)
+            }
+            title={
+              bggQuota && bggQuota.remainingToday === 0
+                ? "Alcanzaste el límite de 2 actualizaciones de ludoteca por día."
+                : undefined
+            }
             className={`inline-flex min-h-11 items-center gap-2 rounded-xl px-4.5 text-sm font-bold shadow-xs transition ${
               syncPhase === "done"
                 ? "bg-forest-500 text-white"
-                : "bg-forest-600 text-white hover:bg-forest-700 disabled:opacity-90"
+                : bggQuota && bggQuota.remainingToday === 0
+                  ? "border border-border bg-canvas-subtle text-ink-subtle cursor-not-allowed"
+                  : "bg-forest-600 text-white hover:bg-forest-700 disabled:opacity-90"
             }`}
           >
             {syncPhase === "syncing" ? (
@@ -293,7 +371,9 @@ export function LibraryPage() {
                 ? "Sincronizando con BGG…"
                 : syncPhase === "done"
                   ? "¡Sincronizado!"
-                  : "Sincronizar con BGG"}
+                  : bggQuota && bggQuota.remainingToday === 0
+                    ? "Límite diario alcanzado (2/2)"
+                    : "Sincronizar con BGG"}
             </span>
           </button>
         </div>
@@ -321,7 +401,7 @@ export function LibraryPage() {
               required
               value={bggUsernameInput}
               onChange={(e) => setBggUsernameInput(e.target.value)}
-              placeholder="Ej. aguspre"
+              placeholder="Ej. kaoskat"
               className="w-full min-h-10 rounded-xl border border-forest-200 bg-surface px-3.5 text-sm font-semibold text-ink focus:border-forest-600 focus:outline-none"
             />
           </div>

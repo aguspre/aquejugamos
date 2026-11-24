@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { authenticate } from '../../middleware/auth.js';
+import { authenticate, requireRegisteredUser } from '../../middleware/auth.js';
 import {
   createPlayLogSchema,
   groupStatsParamsSchema,
@@ -15,6 +15,7 @@ import {
 
 export async function playLogRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', authenticate);
+  app.addHook('preHandler', requireRegisteredUser);
 
   app.get('/', async (request) => {
     const query = listPlayLogsQuerySchema.parse(request.query);

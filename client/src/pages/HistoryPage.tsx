@@ -6,6 +6,7 @@ import {
   Dices,
   Flame,
   Ghost,
+  History,
   Loader2,
   Plus,
   Trophy,
@@ -14,12 +15,15 @@ import {
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { mapUserSummary } from '../api/mappers';
+import { GuestLockedView } from '../components/auth/GuestLockedView';
 import { OwnerAvatarStack } from '../components/ui/OwnerAvatarStack';
 import { useAppState } from '../context/AppStateContext';
+import { useAuth } from '../context/AuthContext';
 import type { Game } from '../types/domain';
 import { formatShortDate } from '../utils/formatDate';
 
 export function HistoryPage() {
+  const { isAuthenticated, loading: authLoading } = useAuth();
   const {
     isBootstrapping,
     activeGroup,
@@ -82,6 +86,24 @@ export function HistoryPage() {
       // Ignore duplicate
     }
   };
+
+  if (!authLoading && !isAuthenticated) {
+    return (
+      <GuestLockedView
+        eyebrow="Estadísticas y partidas"
+        pageTitle="Historial & Estadísticas"
+        pageSubtitle="Registro de partidas del grupo, tabla de victorias y juegos sin estrenar."
+        icon={History}
+        lockTitle="El historial requiere una cuenta"
+        lockDescription="En modo invitado no podés consultar el historial de partidas ni registrar resultados. Iniciá sesión para acceder a las estadísticas de tu grupo."
+        benefits={[
+          'Llevá el registro de todas las partidas jugadas con puntajes y ganadores.',
+          'Consultá el ranking de victorias y los títulos más jugados del grupo.',
+          'Descubrí la pila de la vergüenza con juegos aún sin estrenar.',
+        ]}
+      />
+    );
+  }
 
   return (
     <div className="space-y-8">

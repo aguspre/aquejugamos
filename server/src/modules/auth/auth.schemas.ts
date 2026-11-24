@@ -70,8 +70,33 @@ export const syncProfileSchema = z
   .optional()
   .default({});
 
+export const invitePreviewQuerySchema = z
+  .object({
+    groupCode: z.string().trim().min(2).max(40).optional(),
+    sessionToken: z.string().trim().min(4).max(80).optional(),
+  })
+  .refine((v) => Boolean(v.groupCode || v.sessionToken), {
+    message: 'Indicá un código de grupo o token de juntada',
+  });
+
+export const guestJoinSchema = z
+  .object({
+    displayName: z
+      .string()
+      .trim()
+      .min(2, 'Ingresá tu nombre (al menos 2 caracteres)')
+      .max(60, 'El nombre es demasiado largo'),
+    groupInviteCode: z.string().trim().min(2).max(40).optional(),
+    sessionInviteToken: z.string().trim().min(4).max(80).optional(),
+  })
+  .refine((v) => Boolean(v.groupInviteCode || v.sessionInviteToken), {
+    message: 'Se requiere un enlace de invitación válido para entrar como invitado',
+  });
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type GoogleAuthInput = z.infer<typeof googleAuthSchema>;
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 export type SyncProfileInput = z.infer<typeof syncProfileSchema>;
+export type InvitePreviewQuery = z.infer<typeof invitePreviewQuerySchema>;
+export type GuestJoinInput = z.infer<typeof guestJoinSchema>;

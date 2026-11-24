@@ -24,6 +24,47 @@ export interface AuthUserResponse extends ApiUserSummary {
   createdAt: string;
 }
 
+export interface InvitePreviewGroup {
+  kind: 'group';
+  groupId: string;
+  groupName: string;
+  inviteCode: string;
+  activeSession: {
+    id: string;
+    title: string;
+    scheduledAt: string;
+    status: SessionStatus;
+  } | null;
+}
+
+export interface InvitePreviewSession {
+  kind: 'session';
+  sessionId: string;
+  sessionTitle: string;
+  groupName: string;
+  scheduledAt: string;
+  status: SessionStatus;
+}
+
+export type InvitePreview = InvitePreviewGroup | InvitePreviewSession;
+
+export interface GuestScope {
+  kind: 'group' | 'session';
+  groupId?: string | null;
+  sessionId?: string | null;
+  groupName: string | null;
+  targetSessionId?: string | null;
+}
+
+export interface BggSyncQuota {
+  dailyLimit: number;
+  usedToday: number;
+  remainingToday: number;
+  nextResetAt: string | null;
+  cooldownUntil: string | null;
+  inProgress: boolean;
+}
+
 export interface BggSyncResponse {
   sync: {
     bggUsername: string;
@@ -32,6 +73,7 @@ export interface BggSyncResponse {
     addedToLibrary: number;
     updatedInLibrary: number;
     syncedAt: string;
+    quota?: BggSyncQuota;
   };
 }
 
@@ -48,6 +90,26 @@ export interface BggSearchResult {
 }
 
 export const authApi = {
+  invitePreview: (query: { groupCode?: string; sessionToken?: string }) =>
+    apiRequest<{ preview: InvitePreview }>('/api/auth/invite-preview', {
+      query,
+    }),
+
+  guestJoin: (payload: {
+    displayName: string;
+    groupInviteCode?: string;
+    sessionInviteToken?: string;
+  }) =>
+    apiRequest<{
+      token: string;
+      user: AuthUserResponse;
+      isGuest: true;
+      guestScope: GuestScope;
+    }>('/api/auth/guest-join', {
+      method: 'POST',
+      body: payload,
+    }),
+
   register: (payload: {
     email: string;
     password: string;
@@ -65,7 +127,12 @@ export const authApi = {
       body: payload,
     }),
 
-  me: () => apiRequest<{ user: AuthUserResponse }>('/api/auth/me'),
+  me: () =>
+    apiRequest<{
+      user: AuthUserResponse;
+      isGuest?: boolean;
+      guestScope?: GuestScope | null;
+    }>('/api/auth/me'),
 
   sync: (
     payload?: {
@@ -93,6 +160,8 @@ export const authApi = {
 };
 
 export const bggApi = {
+  getQuota: () => apiRequest<{ quota: BggSyncQuota }>('/api/bgg/quota'),
+
   sync: (payload: { bggUsername?: string; forceRefresh?: boolean }) =>
     apiRequest<BggSyncResponse>('/api/bgg/sync', {
       method: 'POST',

@@ -6,8 +6,10 @@ import {
   Link2,
   Loader2,
   Lock,
+  LogIn,
   MapPin,
   Plus,
+  UserPlus,
   Vote,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -15,6 +17,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { CreateSessionModal } from '../components/sessions/CreateSessionModal';
 import { OwnerAvatarStack } from '../components/ui/OwnerAvatarStack';
 import { useAppState } from '../context/AppStateContext';
+import { useAuth } from '../context/AuthContext';
 import type { GameSession, SessionStatus, VotingMode } from '../types/domain';
 import { formatSessionDate } from '../utils/formatDate';
 
@@ -51,6 +54,7 @@ const VOTING_MODE_LABEL: Record<VotingMode, string> = {
 };
 
 export function SessionsHubPage() {
+  const { isAuthenticated, isGuestSession, guestScope, openAuthModal } = useAuth();
   const { isBootstrapping, activeGroup, sessions, createSession } = useAppState();
   const [createOpen, setCreateOpen] = useState(false);
   const [scope, setScope] = useState<'group' | 'all'>('group');
@@ -85,16 +89,22 @@ export function SessionsHubPage() {
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <span className="text-xs font-bold uppercase tracking-wider text-forest-600">
-              {scope === 'group' && activeGroup
-                ? activeGroup.name
-                : 'Todas tus juntadas'}
+              {isGuestSession && guestScope?.groupName
+                ? `Invitado en ${guestScope.groupName}`
+                : scope === 'group' && activeGroup
+                  ? activeGroup.name
+                  : isAuthenticated
+                    ? 'Todas tus juntadas'
+                    : 'Modo invitado'}
             </span>
-            <Link
-              to="/groups"
-              className="text-xs font-semibold text-ink-subtle underline hover:text-forest-600"
-            >
-              Gestionar grupos
-            </Link>
+            {isAuthenticated && (
+              <Link
+                to="/groups"
+                className="text-xs font-semibold text-ink-subtle underline hover:text-forest-600"
+              >
+                Gestionar grupos
+              </Link>
+            )}
           </div>
           <h1 className="font-[var(--font-display)] text-3xl sm:text-4xl font-bold tracking-tight text-ink">
             Juntadas
@@ -135,10 +145,20 @@ export function SessionsHubPage() {
 
           <button
             type="button"
-            onClick={() => setCreateOpen(true)}
-            className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-forest-600 px-4.5 text-sm font-bold text-white shadow-xs hover:bg-forest-700 transition"
+            onClick={() =>
+              isAuthenticated ? setCreateOpen(true) : openAuthModal('signin')
+            }
+            className={`inline-flex min-h-11 items-center gap-2 rounded-xl px-4.5 text-sm font-bold shadow-xs transition ${
+              isAuthenticated
+                ? 'bg-forest-600 text-white hover:bg-forest-700'
+                : 'border border-border-strong bg-canvas-subtle text-ink-muted hover:bg-canvas-deep hover:text-ink'
+            }`}
           >
-            <Plus className="h-4.5 w-4.5" aria-hidden="true" />
+            {isAuthenticated ? (
+              <Plus className="h-4.5 w-4.5" aria-hidden="true" />
+            ) : (
+              <Lock className="h-4 w-4 text-ink-subtle" aria-hidden="true" />
+            )}
             Nueva juntada
           </button>
         </div>
@@ -152,25 +172,57 @@ export function SessionsHubPage() {
       ) : upcoming.length === 0 ? (
         <div className="rounded-3xl border border-dashed border-border-strong bg-surface/80 px-6 py-14 text-center space-y-4">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-forest-50 text-forest-700">
-            <CalendarDays className="h-6 w-6" aria-hidden="true" />
+            {isAuthenticated || isGuestSession ? (
+              <CalendarDays className="h-6 w-6" aria-hidden="true" />
+            ) : (
+              <Lock className="h-6 w-6 text-terracotta-600" aria-hidden="true" />
+            )}
           </div>
           <div className="space-y-1">
             <h2 className="font-[var(--font-display)] text-2xl font-bold text-ink">
-              Todavía no hay juntadas programadas
+              {isGuestSession
+                ? `Todavía no hay juntadas activas${guestScope?.groupName ? ` en ${guestScope.groupName}` : ''}`
+                : isAuthenticated
+                  ? 'Todavía no hay juntadas programadas'
+                  : 'Iniciá sesión o entrá con un link de invitación'}
             </h2>
             <p className="text-sm text-ink-muted max-w-md mx-auto">
-              Creá una juntada para tu grupo o generá un link directo para que tus amigos
-              confirmen asistencia y voten qué jugar.
+              {isGuestSession
+                ? 'Cuando el grupo publique una juntada, va a aparecer acá para que confirmes asistencia y votes.'
+                : isAuthenticated
+                  ? 'Creá una juntada para tu grupo o generá un link directo para que tus amigos confirmen asistencia y voten qué jugar.'
+                  : 'En modo invitado no podés crear juntadas ni grupos. Si un amigo te compartió un link de invitación, abrilo para ingresar con tu nombre y votar.'}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setCreateOpen(true)}
-            className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-forest-600 px-5 text-sm font-bold text-white hover:bg-forest-700 transition"
-          >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            Crear primera juntada
-          </button>
+          {isAuthenticated ? (
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-forest-600 px-5 text-sm font-bold text-white hover:bg-forest-700 transition"
+            >
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              Crear primera juntada
+            </button>
+          ) : (
+            <div className="flex flex-wrap justify-center gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => openAuthModal('signin')}
+                className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-forest-600 px-5 text-sm font-bold text-white hover:bg-forest-700 transition"
+              >
+                <LogIn className="h-4 w-4" aria-hidden="true" />
+                Iniciar sesión
+              </button>
+              <button
+                type="button"
+                onClick={() => openAuthModal('signup')}
+                className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border-strong bg-surface px-5 text-sm font-bold text-ink hover:bg-canvas-subtle transition"
+              >
+                <UserPlus className="h-4 w-4 text-forest-600" aria-hidden="true" />
+                Crear cuenta
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         <section className="space-y-4">
@@ -282,33 +334,35 @@ export function SessionsHubPage() {
                     />
 
                     <div className="card-elevated-action flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleCopyInvite(session)}
-                        className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-border bg-canvas px-2.5 text-xs font-semibold text-ink-muted hover:border-border-strong hover:text-ink transition"
-                        title="Copiar link de invitación"
-                      >
-                        {copiedId === session.id ? (
-                          <>
-                            <Check
-                              className="h-3.5 w-3.5 text-forest-600"
-                              aria-hidden="true"
-                            />
-                            <span className="text-forest-700">Copiado</span>
-                          </>
-                        ) : (
-                          <>
-                            <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
-                            <span>Invitar</span>
-                          </>
-                        )}
-                      </button>
+                      {isAuthenticated && (
+                        <button
+                          type="button"
+                          onClick={() => handleCopyInvite(session)}
+                          className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-border bg-canvas px-2.5 text-xs font-semibold text-ink-muted hover:border-border-strong hover:text-ink transition"
+                          title="Copiar link de invitación"
+                        >
+                          {copiedId === session.id ? (
+                            <>
+                              <Check
+                                className="h-3.5 w-3.5 text-forest-600"
+                                aria-hidden="true"
+                              />
+                              <span className="text-forest-700">Copiado</span>
+                            </>
+                          ) : (
+                            <>
+                              <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+                              <span>Invitar</span>
+                            </>
+                          )}
+                        </button>
+                      )}
 
                       <Link
                         to={`/sessions/${session.id}`}
                         className="inline-flex min-h-9 items-center gap-1 rounded-lg bg-forest-600 px-3 text-xs font-bold text-white hover:bg-forest-700 transition"
                       >
-                        <span>Abrir sala</span>
+                        <span>{isAuthenticated ? 'Abrir sala' : 'Entrar y votar'}</span>
                         <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
                       </Link>
                     </div>

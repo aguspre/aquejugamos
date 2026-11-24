@@ -19,10 +19,13 @@ import {
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ApiError } from '../api/client';
+import { GuestLockedView } from '../components/auth/GuestLockedView';
 import { OwnerAvatarStack } from '../components/ui/OwnerAvatarStack';
 import { useAppState } from '../context/AppStateContext';
+import { useAuth } from '../context/AuthContext';
 
 export function GroupsPage() {
+  const { isAuthenticated, loading: authLoading } = useAuth();
   const {
     currentUser,
     isBootstrapping,
@@ -158,6 +161,24 @@ export function GroupsPage() {
     ? sessions.filter((s) => s.groupId === selectedGroup.id).length
     : 0;
   const groupGamesCount = selectedGroup ? getGroupGameCount(selectedGroup.id) : 0;
+
+  if (!authLoading && !isAuthenticated) {
+    return (
+      <GuestLockedView
+        eyebrow="Mesas habituales"
+        pageTitle="Mis Grupos"
+        pageSubtitle="Armá tus grupos de juego, compartí códigos de invitación y gestioná miembros."
+        icon={Users}
+        lockTitle="Los grupos requieren una cuenta"
+        lockDescription="En modo invitado no podés ver ni crear grupos. Iniciá sesión o registrate para armar tus mesas habituales y cruzar ludotecas con tus amigos."
+        benefits={[
+          'Creá grupos privados y compartí links de invitación por WhatsApp.',
+          'Sumá las colecciones de todos los integrantes automáticamente.',
+          'Administrá miembros, roles y el grupo activo en cada juntada.',
+        ]}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">

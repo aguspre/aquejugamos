@@ -1,7 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { verifyFirebaseIdToken } from '../config/firebase.js';
 import { syncFirebaseUser } from '../modules/auth/auth.service.js';
-import { AppError, unauthorized } from '../utils/errors.js';
+import { AppError, forbidden, unauthorized } from '../utils/errors.js';
 
 function extractBearerToken(authorizationHeader?: string): string | null {
   if (!authorizationHeader) return null;
@@ -14,7 +14,7 @@ function extractBearerToken(authorizationHeader?: string): string | null {
 
 /**
  * Inspecciona el encabezado JWT sin verificar firma solo para enrutar entre
- * tokens RS256 de Firebase Auth y JWT locales HS256 (compatibilidad legacy).
+ * tokens RS256 de Firebase Auth y JWT locales HS256 (compatibilidad legacy e invitados).
  * La validación criptográfica real siempre la realizan firebase-admin o @fastify/jwt.
  */
 function isLikelyFirebaseToken(token: string): boolean {
@@ -65,5 +65,17 @@ export async function authenticate(
     await request.jwtVerify();
   } catch {
     throw unauthorized('Token inválido o expirado', 'INVALID_TOKEN');
+  }
+}
+
+export async function requireRegisteredUser(
+  request: FastifyRequest,
+  _reply: FastifyReply,
+): Promise<void> {
+  if (request.user?.isGuest) {
+    throw forbidden(
+      'Esta acción requiere una cuenta registrada. Iniciá sesión o creá tu cuenta para continuar.',
+      'GUEST_ACTION_FORBIDDEN',
+    );
   }
 }

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { authenticate } from '../../middleware/auth.js';
+import { authenticate, requireRegisteredUser } from '../../middleware/auth.js';
 import {
   bggImportBodySchema,
   bggImportParamsSchema,
@@ -7,6 +7,7 @@ import {
   bggSyncSchema,
 } from './bgg.schemas.js';
 import {
+  getUserBggSyncQuota,
   importGameToLibrary,
   searchBggCatalog,
   syncUserBggCollection,
@@ -14,6 +15,12 @@ import {
 
 export async function bggRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', authenticate);
+  app.addHook('preHandler', requireRegisteredUser);
+
+  app.get('/quota', async (request) => {
+    const quota = await getUserBggSyncQuota(request.user.sub);
+    return { quota };
+  });
 
   app.post('/sync', async (request) => {
     const input = bggSyncSchema.parse(request.body ?? {});

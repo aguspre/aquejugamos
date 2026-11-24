@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { authenticate } from '../../middleware/auth.js';
+import { authenticate, requireRegisteredUser } from '../../middleware/auth.js';
 import {
   createGroupSchema,
   groupIdParamsSchema,
@@ -19,6 +19,7 @@ import {
 
 export async function groupRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', authenticate);
+  app.addHook('preHandler', requireRegisteredUser);
 
   app.get('/', async (request) => {
     const groups = await listUserGroups(request.user.sub);

@@ -13,7 +13,7 @@ vi.mock('../auth.service.js', () => ({
   syncFirebaseUser: (...args: unknown[]) => syncFirebaseUserMock(...args),
 }));
 
-import { authenticate } from '../../../middleware/auth.js';
+import { authenticate, requireRegisteredUser } from '../../../middleware/auth.js';
 
 function makeFakeJwt(header: Record<string, unknown>): string {
   const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
@@ -108,5 +108,36 @@ describe('authenticate middleware (Firebase ID Token + legacy JWT)', () => {
 
     expect(verifyFirebaseIdTokenMock).not.toHaveBeenCalled();
     expect(jwtVerify).toHaveBeenCalledTimes(1);
+  });
+
+  it('requireRegisteredUser bloquea acciones de usuarios invitados con 403', async () => {
+    const guestRequest = {
+      user: {
+        sub: 'guest-uuid',
+        email: 'guest+1@guest.aquejugamos.local',
+        isGuest: true,
+        guestGroupId: 'group-1',
+      },
+    } as unknown as FastifyRequest;
+
+    await expect(
+      requireRegisteredUser(guestRequest, {} as FastifyReply),
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'GUEST_ACTION_FORBIDDEN',
+    });
+  });
+
+  it('requireRegisteredUser permite continuar a usuarios registrados', async () => {
+    const registeredRequest = {
+      user: {
+        sub: 'user-uuid',
+        email: 'agus@example.com',
+      },
+    } as unknown as FastifyRequest;
+
+    await expect(
+      requireRegisteredUser(registeredRequest, {} as FastifyReply),
+    ).resolves.toBeUndefined();
   });
 });

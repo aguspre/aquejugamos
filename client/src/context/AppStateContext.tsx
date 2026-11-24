@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  type Context,
   type ReactNode,
 } from "react";
 import { ApiError } from "../api/client";
@@ -171,7 +172,14 @@ const GUEST_USER: UserSummary = {
   accentColor: "#1E4D3B",
 };
 
-const AppStateContext = createContext<AppStateContextValue | null>(null);
+const AppStateContext: Context<AppStateContextValue | null> =
+  (import.meta.hot?.data?.AppStateContext as
+    | Context<AppStateContextValue | null>
+    | undefined) ?? createContext<AppStateContextValue | null>(null);
+
+if (import.meta.hot) {
+  import.meta.hot.data.AppStateContext = AppStateContext;
+}
 
 function formatRelativeSync(isoDate: string | null | undefined): string {
   if (!isoDate) return "Nunca sincronizada";
@@ -192,13 +200,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     firebaseUser,
     backendUser,
     isAuthenticated,
+    isGuestSession,
     loading: authLoading,
     backendSyncStatus,
     openAuthModal,
     refreshBackendSync,
   } = useAuth();
 
-  const isBackendReady = isAuthenticated && backendUser !== null;
+  const isRegisteredReady = isAuthenticated && backendUser !== null;
+  const isInvitedGuestReady = isGuestSession && backendUser !== null;
 
   const currentUser = useMemo<UserSummary>(() => {
     if (backendUser) {
@@ -246,10 +256,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     playerIds?: string[];
   }>({ open: false });
 
-  const ensureAuthenticated = useCallback(() => {
+  const ensureRegistered = useCallback(() => {
     if (!isAuthenticated) {
       openAuthModal("signin");
-      throw new ApiError(401, "AUTH_REQUIRED", "Iniciá sesión para continuar.");
+      throw new ApiError(
+        403,
+        "GUEST_ACTION_FORBIDDEN",
+        "Iniciá sesión o creá tu cuenta para realizar esta acción.",
+      );
     }
     if (!backendUser) {
       throw new ApiError(
@@ -259,6 +273,27 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       );
     }
   }, [isAuthenticated, backendUser, openAuthModal]);
+
+  const ensureSessionAccess = useCallback(() => {
+    if (isRegisteredReady || isInvitedGuestReady) {
+      return;
+    }
+    if (!isAuthenticated && !isGuestSession) {
+      openAuthModal("signin");
+      throw new ApiError(401, "AUTH_REQUIRED", "Iniciá sesión para continuar.");
+    }
+    throw new ApiError(
+      503,
+      "BACKEND_NOT_SYNCED",
+      "El servidor todavía no sincronizó tu perfil. Revisá la conexión con el backend.",
+    );
+  }, [
+    isRegisteredReady,
+    isInvitedGuestReady,
+    isAuthenticated,
+    isGuestSession,
+    openAuthModal,
+  ]);
 
   const setActiveGroupId = useCallback((groupId: string) => {
     setActiveGroupIdState(groupId);
@@ -276,7 +311,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const refreshGroupStats = useCallback(
     async (groupId: string | null) => {
-      if (!isBackendReady || !groupId) {
+      if (!isRegisteredReady || !groupId) {
         setActiveGroupStats(null);
         return;
       }
@@ -287,11 +322,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         setActiveGroupStats(null);
       }
     },
-    [isBackendReady],
+    [isRegisteredReady],
   );
 
   const refreshAll = useCallback(async () => {
-    if (!isBackendReady) {
+    if (!isRegisteredReady && !isInvitedGuestReady) {
       setGroups([]);
       setLibrary([]);
       setSessions([]);
@@ -303,6 +338,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
     setIsBootstrapping(true);
     try {
+      if (isInvitedGuestReady && !isRegisteredReady) {
+        const sessionsRes = await sessionsApi.list();
+        setGroups([]);
+        setLibrary([]);
+        setPlayLogs([]);
+        setActiveGroupStats(null);
+        setSessions(sessionsRes.sessions.map(mapSessionListItem));
+        return;
+      }
+
       const [groupsRes, libraryRes, sessionsRes, logsRes] = await Promise.all([
         groupsApi.list(),
         libraryApi.list(),
@@ -325,7 +370,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsBootstrapping(false);
     }
-  }, [isBackendReady]);
+  }, [isRegisteredReady, isInvitedGuestReady]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -334,7 +379,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       return;
     }
     void refreshAll();
-  }, [authLoading, isAuthenticated, backendSyncStatus, refreshAll]);
+  }, [
+    authLoading,
+    isAuthenticated,
+    isGuestSession,
+    backendSyncStatus,
+    refreshAll,
+  ]);
 
   useEffect(() => {
     void refreshGroupStats(activeGroup?.id ?? null);
@@ -404,21 +455,21 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const createGroup = useCallback(
     async (name: string): Promise<EnrichedGroup> => {
-      ensureAuthenticated();
+      ensureRegistered();
       const { group } = await groupsApi.create(name.trim());
       const mapped = mapGroup(group);
       setGroups((prev) => [mapped, ...prev]);
       setActiveGroupId(mapped.id);
       return mapped;
     },
-    [ensureAuthenticated, setActiveGroupId],
+    [ensureRegistered, setActiveGroupId],
   );
 
   const joinGroupByCode = useCallback(
     async (
       rawCode: string,
     ): Promise<{ group: EnrichedGroup; alreadyMember: boolean }> => {
-      ensureAuthenticated();
+      ensureRegistered();
       const { group, alreadyMember } = await groupsApi.join(rawCode.trim());
       const mapped = mapGroup(group);
       setGroups((prev) => {
@@ -430,24 +481,24 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setActiveGroupId(mapped.id);
       return { group: mapped, alreadyMember };
     },
-    [ensureAuthenticated, setActiveGroupId],
+    [ensureRegistered, setActiveGroupId],
   );
 
   const regenerateInviteCode = useCallback(
     async (groupId: string): Promise<string> => {
-      ensureAuthenticated();
+      ensureRegistered();
       const { inviteCode } = await groupsApi.regenerateCode(groupId);
       setGroups((prev) =>
         prev.map((g) => (g.id === groupId ? { ...g, inviteCode } : g)),
       );
       return inviteCode;
     },
-    [ensureAuthenticated],
+    [ensureRegistered],
   );
 
   const toggleMemberRole = useCallback(
     async (groupId: string, userId: string): Promise<void> => {
-      ensureAuthenticated();
+      ensureRegistered();
       const targetGroup = groups.find((g) => g.id === groupId);
       const targetMember = targetGroup?.members.find(
         (m) => m.user.id === userId,
@@ -463,12 +514,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       const mapped = mapGroup(group);
       setGroups((prev) => prev.map((g) => (g.id === groupId ? mapped : g)));
     },
-    [ensureAuthenticated, groups],
+    [ensureRegistered, groups],
   );
 
   const removeGroupMember = useCallback(
     async (groupId: string, userId: string): Promise<void> => {
-      ensureAuthenticated();
+      ensureRegistered();
       const { groupDeleted } = await groupsApi.removeMember(groupId, userId);
       if (groupDeleted || userId === currentUser.id) {
         setGroups((prev) => {
@@ -483,7 +534,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         setGroups(refreshed.map(mapGroup));
       }
     },
-    [ensureAuthenticated, currentUser.id, activeGroupId],
+    [ensureRegistered, currentUser.id, activeGroupId],
   );
 
   // =========================================================================
@@ -495,7 +546,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       bggUsername?: string,
       forceRefresh = false,
     ): Promise<BggSyncResponse["sync"]> => {
-      ensureAuthenticated();
+      ensureRegistered();
       const { sync } = await bggApi.sync({ bggUsername, forceRefresh });
       const [libraryRes, groupsRes] = await Promise.all([
         libraryApi.list(),
@@ -506,16 +557,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setGroups(groupsRes.groups.map(mapGroup));
       return sync;
     },
-    [ensureAuthenticated, refreshBackendSync],
+    [ensureRegistered, refreshBackendSync],
   );
 
   const searchBgg = useCallback(
     async (query: string): Promise<BggSearchResult[]> => {
-      ensureAuthenticated();
+      ensureRegistered();
       const { results } = await bggApi.search(query);
       return results;
     },
-    [ensureAuthenticated],
+    [ensureRegistered],
   );
 
   const importBggGame = useCallback(
@@ -523,7 +574,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       bggId: number,
       status: UserGameStatus = "owned",
     ): Promise<LibraryGameItem> => {
-      ensureAuthenticated();
+      ensureRegistered();
       const { item } = await bggApi.importGame(bggId, { status });
       const mapped = mapLibraryItem(item);
       setLibrary((prev) => {
@@ -534,7 +585,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       });
       return mapped;
     },
-    [ensureAuthenticated],
+    [ensureRegistered],
   );
 
   const updateLibraryItem = useCallback(
@@ -544,7 +595,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         Pick<LibraryGameItem, "status" | "personalRating" | "notes">
       >,
     ): Promise<void> => {
-      ensureAuthenticated();
+      ensureRegistered();
       await libraryApi.updateItem(gameId, {
         status: patch.status,
         personalRating: patch.personalRating ?? null,
@@ -554,16 +605,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         prev.map((item) => (item.id === gameId ? { ...item, ...patch } : item)),
       );
     },
-    [ensureAuthenticated],
+    [ensureRegistered],
   );
 
   const removeLibraryItem = useCallback(
     async (gameId: string): Promise<void> => {
-      ensureAuthenticated();
+      ensureRegistered();
       await libraryApi.removeItem(gameId);
       setLibrary((prev) => prev.filter((item) => item.id !== gameId));
     },
-    [ensureAuthenticated],
+    [ensureRegistered],
   );
 
   // =========================================================================
@@ -581,7 +632,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const createSession = useCallback(
     async (input: CreateSessionInput): Promise<GameSession> => {
-      ensureAuthenticated();
+      ensureRegistered();
       const { session } = await sessionsApi.create({
         groupId: input.groupId,
         title: input.title,
@@ -594,7 +645,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       upsertSession(mapped);
       return mapped;
     },
-    [ensureAuthenticated, upsertSession],
+    [ensureRegistered, upsertSession],
   );
 
   const joinSessionByToken = useCallback(
@@ -602,36 +653,36 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       inviteToken: string,
       rsvp: RsvpStatus = "going",
     ): Promise<GameSession> => {
-      ensureAuthenticated();
+      ensureSessionAccess();
       const { session } = await sessionsApi.joinByToken(inviteToken, rsvp);
       const mapped = mapSessionDetail(session);
       upsertSession(mapped);
       return mapped;
     },
-    [ensureAuthenticated, upsertSession],
+    [ensureSessionAccess, upsertSession],
   );
 
   const loadSessionDetail = useCallback(
     async (sessionId: string): Promise<GameSession> => {
-      ensureAuthenticated();
+      ensureSessionAccess();
       const { session } = await sessionsApi.getDetail(sessionId);
       const mapped = mapSessionDetail(session);
       upsertSession(mapped);
       return mapped;
     },
-    [ensureAuthenticated, upsertSession],
+    [ensureSessionAccess, upsertSession],
   );
 
   const loadSessionPool = useCallback(
     async (sessionId: string): Promise<SessionGameItem[]> => {
-      ensureAuthenticated();
+      ensureSessionAccess();
       const { items } = await sessionsApi.getPool(sessionId, {
         onlyCompatible: false,
         includeExpansions: true,
       });
       return items.map(mapPoolGame);
     },
-    [ensureAuthenticated],
+    [ensureSessionAccess],
   );
 
   const updateRsvp = useCallback(
@@ -640,13 +691,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       _userId: string,
       rsvp: RsvpStatus,
     ): Promise<GameSession> => {
-      ensureAuthenticated();
+      ensureSessionAccess();
       const { session } = await sessionsApi.updateRsvp(sessionId, rsvp);
       const mapped = mapSessionDetail(session);
       upsertSession(mapped);
       return mapped;
     },
-    [ensureAuthenticated, upsertSession],
+    [ensureSessionAccess, upsertSession],
   );
 
   const proposeGame = useCallback(
@@ -655,18 +706,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       game: Game,
       note?: string,
     ): Promise<GameSession> => {
-      ensureAuthenticated();
+      ensureSessionAccess();
       const { session } = await sessionsApi.propose(sessionId, game.id, note);
       const mapped = mapSessionDetail(session);
       upsertSession(mapped);
       return mapped;
     },
-    [ensureAuthenticated, upsertSession],
+    [ensureSessionAccess, upsertSession],
   );
 
   const removeProposal = useCallback(
     async (sessionId: string, proposalId: string): Promise<GameSession> => {
-      ensureAuthenticated();
+      ensureSessionAccess();
       const { session } = await sessionsApi.removeProposal(
         sessionId,
         proposalId,
@@ -675,7 +726,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       upsertSession(mapped);
       return mapped;
     },
-    [ensureAuthenticated, upsertSession],
+    [ensureSessionAccess, upsertSession],
   );
 
   const toggleVote = useCallback(
@@ -684,7 +735,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       proposalId: string,
       requestedRank?: number,
     ): Promise<GameSession> => {
-      ensureAuthenticated();
+      ensureSessionAccess();
       const targetSession = sessions.find((s) => s.id === sessionId);
       const targetProposal = targetSession?.proposals.find(
         (p) => p.id === proposalId,
@@ -705,12 +756,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       upsertSession(mapped);
       return mapped;
     },
-    [ensureAuthenticated, sessions, upsertSession],
+    [ensureSessionAccess, sessions, upsertSession],
   );
 
   const toggleSessionLock = useCallback(
     async (sessionId: string): Promise<GameSession> => {
-      ensureAuthenticated();
+      ensureRegistered();
       const current = sessions.find((s) => s.id === sessionId);
       const nextStatus = current?.status === "locked" ? "voting" : "locked";
 
@@ -719,7 +770,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       upsertSession(mapped);
       return mapped;
     },
-    [ensureAuthenticated, sessions, upsertSession],
+    [ensureRegistered, sessions, upsertSession],
   );
 
   // =========================================================================
@@ -728,7 +779,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const addPlayLog = useCallback(
     async (input: CreatePlayLogInput): Promise<PlayLog> => {
-      ensureAuthenticated();
+      ensureRegistered();
       const resolvedGroupId =
         input.groupId !== undefined ? input.groupId : (activeGroup?.id ?? null);
       const { playLog } = await playLogsApi.create({
@@ -751,19 +802,19 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       }
       return mapped;
     },
-    [ensureAuthenticated, activeGroup, refreshGroupStats],
+    [ensureRegistered, activeGroup, refreshGroupStats],
   );
 
   const deletePlayLog = useCallback(
     async (playLogId: string): Promise<void> => {
-      ensureAuthenticated();
+      ensureRegistered();
       await playLogsApi.remove(playLogId);
       setPlayLogs((prev) => prev.filter((l) => l.id !== playLogId));
       if (activeGroup?.id) {
         void refreshGroupStats(activeGroup.id);
       }
     },
-    [ensureAuthenticated, activeGroup, refreshGroupStats],
+    [ensureRegistered, activeGroup, refreshGroupStats],
   );
 
   const openLogPlayModal: AppStateContextValue["openLogPlayModal"] =

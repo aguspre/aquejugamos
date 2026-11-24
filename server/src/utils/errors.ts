@@ -27,6 +27,12 @@ export const notFound = (message = 'Recurso no encontrado', code = 'NOT_FOUND') 
 export const conflict = (message: string, code = 'CONFLICT') =>
   new AppError(409, code, message);
 
+export const tooManyRequests = (
+  message: string,
+  code = 'TOO_MANY_REQUESTS',
+  details?: unknown,
+) => new AppError(429, code, message, details);
+
 export const badGateway = (message: string, code = 'BAD_GATEWAY', details?: unknown) =>
   new AppError(502, code, message, details);
 

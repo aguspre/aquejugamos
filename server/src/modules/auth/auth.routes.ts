@@ -1,8 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { getEnv } from '../../config/env.js';
-import { authenticate } from '../../middleware/auth.js';
+import { authenticate, requireRegisteredUser } from '../../middleware/auth.js';
 import {
   googleAuthSchema,
+  guestJoinSchema,
+  invitePreviewQuerySchema,
   loginSchema,
   registerSchema,
   syncProfileSchema,
@@ -10,6 +12,8 @@ import {
 } from './auth.schemas.js';
 import {
   authenticateWithGoogle,
+  createGuestForInvite,
+  getInvitePreview,
   getUserProfile,
   loginUser,
   registerUser,
@@ -24,6 +28,42 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       { expiresIn: env.JWT_EXPIRES_IN },
     );
   };
+
+  app.get('/invite-preview', async (request) => {
+    const query = invitePreviewQuerySchema.parse(request.query);
+    const preview = await getInvitePreview(query);
+    return { preview };
+  });
+
+  app.post('/guest-join', async (request, reply) => {
+    const input = guestJoinSchema.parse(request.body);
+    const { user, guestScope } = await createGuestForInvite(input);
+    const env = getEnv();
+    const token = app.jwt.sign(
+      {
+        sub: user.id,
+        email: user.email,
+        isGuest: true,
+        ...(guestScope.kind === 'group'
+          ? {
+              guestGroupId: guestScope.groupId,
+              guestGroupName: guestScope.groupName,
+            }
+          : {
+              guestSessionId: guestScope.sessionId,
+              guestGroupName: guestScope.groupName,
+            }),
+      },
+      { expiresIn: env.JWT_EXPIRES_IN },
+    );
+
+    return reply.status(201).send({
+      token,
+      user,
+      isGuest: true,
+      guestScope,
+    });
+  });
 
   app.post('/register', async (request, reply) => {
     const input = registerSchema.parse(request.body);
@@ -49,28 +89,46 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     return { token, user };
   });
 
-  app.post('/sync', { preHandler: [authenticate] }, async (request) => {
-    const input = syncProfileSchema.parse(request.body);
-    const hasUpdates =
-      input.displayName !== undefined ||
-      input.avatarUrl !== undefined ||
-      input.bggUsername !== undefined;
+  app.post(
+    '/sync',
+    { preHandler: [authenticate, requireRegisteredUser] },
+    async (request) => {
+      const input = syncProfileSchema.parse(request.body);
+      const hasUpdates =
+        input.displayName !== undefined ||
+        input.avatarUrl !== undefined ||
+        input.bggUsername !== undefined;
 
-    const user = hasUpdates
-      ? await updateUserProfile(request.user.sub, input)
-      : await getUserProfile(request.user.sub);
+      const user = hasUpdates
+        ? await updateUserProfile(request.user.sub, input)
+        : await getUserProfile(request.user.sub);
 
-    return { user };
-  });
+      return { user };
+    },
+  );
 
   app.get('/me', { preHandler: [authenticate] }, async (request) => {
     const user = await getUserProfile(request.user.sub);
-    return { user };
+    const isGuest = Boolean(request.user.isGuest);
+    const guestScope = isGuest
+      ? {
+          kind: request.user.guestGroupId ? ('group' as const) : ('session' as const),
+          groupId: request.user.guestGroupId ?? null,
+          sessionId: request.user.guestSessionId ?? null,
+          groupName: request.user.guestGroupName ?? null,
+        }
+      : null;
+
+    return { user, isGuest, guestScope };
   });
 
-  app.patch('/me', { preHandler: [authenticate] }, async (request) => {
-    const input = updateProfileSchema.parse(request.body);
-    const user = await updateUserProfile(request.user.sub, input);
-    return { user };
-  });
+  app.patch(
+    '/me',
+    { preHandler: [authenticate, requireRegisteredUser] },
+    async (request) => {
+      const input = updateProfileSchema.parse(request.body);
+      const user = await updateUserProfile(request.user.sub, input);
+      return { user };
+    },
+  );
 }

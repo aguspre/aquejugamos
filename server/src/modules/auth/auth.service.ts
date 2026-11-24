@@ -1,4 +1,5 @@
-import { Prisma, type User } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
+import { Prisma, RsvpStatus, SessionStatus, type User } from '@prisma/client';
 import type { DecodedIdToken } from 'firebase-admin/auth';
 import { OAuth2Client } from 'google-auth-library';
 import { getEnv } from '../../config/env.js';
@@ -6,6 +7,8 @@ import { prisma } from '../../config/prisma.js';
 import { badRequest, conflict, notFound, unauthorized } from '../../utils/errors.js';
 import { hashPassword, verifyPassword } from '../../utils/password.js';
 import type {
+  GuestJoinInput,
+  InvitePreviewQuery,
   LoginInput,
   RegisterInput,
   UpdateProfileInput,
@@ -259,4 +262,213 @@ export async function updateUserProfile(
   });
 
   return toPublicUser(user);
+}
+
+export async function getInvitePreview(query: InvitePreviewQuery) {
+  if (query.groupCode) {
+    const group = await prisma.group.findFirst({
+      where: {
+        inviteCode: {
+          equals: query.groupCode,
+          mode: 'insensitive',
+        },
+      },
+      select: {
+        id: true,
+        name: true,
+        inviteCode: true,
+        sessions: {
+          where: {
+            status: {
+              in: [SessionStatus.voting, SessionStatus.planning, SessionStatus.locked],
+            },
+          },
+          orderBy: [{ scheduledAt: 'asc' }],
+          select: {
+            id: true,
+            title: true,
+            scheduledAt: true,
+            status: true,
+          },
+        },
+      },
+    });
+
+    if (!group) {
+      throw notFound(
+        'El link de invitación al grupo no es válido o expiró.',
+        'GROUP_INVITE_NOT_FOUND',
+      );
+    }
+
+    const activeSession =
+      group.sessions.find((s) => s.status === SessionStatus.voting) ??
+      group.sessions[0] ??
+      null;
+
+    return {
+      kind: 'group' as const,
+      groupId: group.id,
+      groupName: group.name,
+      inviteCode: group.inviteCode,
+      activeSession,
+    };
+  }
+
+  const session = await prisma.session.findUnique({
+    where: { inviteToken: query.sessionToken! },
+    select: {
+      id: true,
+      title: true,
+      scheduledAt: true,
+      status: true,
+      group: { select: { name: true } },
+    },
+  });
+
+  if (!session) {
+    throw notFound(
+      'El link de invitación a la juntada no es válido o expiró.',
+      'SESSION_INVITE_NOT_FOUND',
+    );
+  }
+
+  if (session.status === SessionStatus.cancelled) {
+    throw badRequest('Esta juntada fue cancelada.', undefined, 'SESSION_CANCELLED');
+  }
+
+  return {
+    kind: 'session' as const,
+    sessionId: session.id,
+    sessionTitle: session.title,
+    groupName: session.group?.name ?? 'Invitación directa',
+    scheduledAt: session.scheduledAt,
+    status: session.status,
+  };
+}
+
+export async function createGuestForInvite(input: GuestJoinInput) {
+  const syntheticEmail = `guest+${randomUUID()}@guest.aquejugamos.local`;
+
+  if (input.groupInviteCode) {
+    const group = await prisma.group.findFirst({
+      where: {
+        inviteCode: {
+          equals: input.groupInviteCode,
+          mode: 'insensitive',
+        },
+      },
+      select: {
+        id: true,
+        name: true,
+        sessions: {
+          where: {
+            status: {
+              in: [SessionStatus.voting, SessionStatus.planning, SessionStatus.locked],
+            },
+          },
+          orderBy: [{ scheduledAt: 'asc' }],
+          select: { id: true, status: true },
+        },
+      },
+    });
+
+    if (!group) {
+      throw notFound(
+        'No encontramos ningún grupo con ese link de invitación.',
+        'GROUP_INVITE_NOT_FOUND',
+      );
+    }
+
+    const targetSession =
+      group.sessions.find((s) => s.status === SessionStatus.voting) ??
+      group.sessions[0] ??
+      null;
+
+    const user = await prisma.user.create({
+      data: {
+        email: syntheticEmail,
+        displayName: input.displayName,
+      },
+    });
+
+    if (targetSession) {
+      await prisma.sessionParticipant.upsert({
+        where: {
+          sessionId_userId: { sessionId: targetSession.id, userId: user.id },
+        },
+        update: {
+          rsvp: RsvpStatus.going,
+          respondedAt: new Date(),
+        },
+        create: {
+          sessionId: targetSession.id,
+          userId: user.id,
+          rsvp: RsvpStatus.going,
+        },
+      });
+    }
+
+    return {
+      user: toPublicUser(user),
+      guestScope: {
+        kind: 'group' as const,
+        groupId: group.id,
+        groupName: group.name,
+        targetSessionId: targetSession?.id ?? null,
+      },
+    };
+  }
+
+  const session = await prisma.session.findUnique({
+    where: { inviteToken: input.sessionInviteToken! },
+    select: {
+      id: true,
+      status: true,
+      group: { select: { name: true } },
+    },
+  });
+
+  if (!session) {
+    throw notFound(
+      'El link de invitación a la juntada no es válido o expiró.',
+      'SESSION_INVITE_NOT_FOUND',
+    );
+  }
+
+  if (session.status === SessionStatus.cancelled) {
+    throw badRequest('Esta juntada fue cancelada.', undefined, 'SESSION_CANCELLED');
+  }
+
+  const user = await prisma.user.create({
+    data: {
+      email: syntheticEmail,
+      displayName: input.displayName,
+    },
+  });
+
+  await prisma.sessionParticipant.upsert({
+    where: {
+      sessionId_userId: { sessionId: session.id, userId: user.id },
+    },
+    update: {
+      rsvp: RsvpStatus.going,
+      respondedAt: new Date(),
+    },
+    create: {
+      sessionId: session.id,
+      userId: user.id,
+      rsvp: RsvpStatus.going,
+    },
+  });
+
+  return {
+    user: toPublicUser(user),
+    guestScope: {
+      kind: 'session' as const,
+      sessionId: session.id,
+      groupName: session.group?.name ?? 'Invitación directa',
+      targetSessionId: session.id,
+    },
+  };
 }

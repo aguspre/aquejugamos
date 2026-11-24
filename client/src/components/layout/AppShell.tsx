@@ -6,6 +6,7 @@ import {
   History,
   Library,
   Loader2,
+  Lock,
   LogIn,
   LogOut,
   Plus,
@@ -13,7 +14,7 @@ import {
   Users,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { NavLink } from 'react-router-dom';
+import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useAppState } from '../../context/AppStateContext';
 import { useAuth } from '../../context/AuthContext';
 import { GroupSwitcher } from '../groups/GroupSwitcher';
@@ -34,6 +35,8 @@ export function AppShell({ children }: AppShellProps) {
   } = useAppState();
   const {
     isAuthenticated,
+    isGuestSession,
+    guestScope,
     firebaseUser,
     backendSyncStatus,
     backendSyncError,
@@ -42,6 +45,12 @@ export function AppShell({ children }: AppShellProps) {
     signOut,
     refreshBackendSync,
   } = useAuth();
+  const navigate = useNavigate();
+
+  const handleSignOut = async () => {
+    await signOut();
+    navigate('/');
+  };
 
   const votingCount = sessions.filter(
     (s) =>
@@ -61,34 +70,38 @@ export function AppShell({ children }: AppShellProps) {
       icon: CalendarDays,
       badge: votingCount > 0 ? String(votingCount) : undefined,
       badgeTone: 'terracotta' as const,
+      locked: false,
     },
     {
       to: '/library',
       label: 'Mi Ludoteca',
       shortLabel: 'Ludoteca',
       icon: Library,
-      badge: String(library.length),
+      badge: isAuthenticated ? String(library.length) : undefined,
       badgeTone: 'neutral' as const,
+      locked: !isAuthenticated,
     },
     {
       to: '/history',
       label: 'Historial',
       shortLabel: 'Historial',
       icon: History,
-      badge: String(activeGroupPlayCount),
+      badge: isAuthenticated ? String(activeGroupPlayCount) : undefined,
       badgeTone: 'neutral' as const,
+      locked: !isAuthenticated,
     },
     {
       to: '/groups',
       label: 'Mis Grupos',
       shortLabel: 'Grupos',
       icon: Users,
-      badge: String(groups.length),
+      badge: isAuthenticated ? String(groups.length) : undefined,
       badgeTone: 'neutral' as const,
+      locked: !isAuthenticated,
     },
   ];
 
-  const mobileNavItems = desktopNavItems.slice(0, 3);
+  const mobileNavItems = desktopNavItems;
 
   return (
     <div className="min-h-dvh flex flex-col lg:flex-row">
@@ -116,7 +129,7 @@ export function AppShell({ children }: AppShellProps) {
           </div>
         </div>
 
-        {/* Navigation Links */}
+        {/* Navigation Links (menu always intact; locked indicator when unauthenticated) */}
         <nav aria-label="Navegación principal" className="flex-1 px-3 space-y-1">
           {desktopNavItems.map((item) => {
             const Icon = item.icon;
@@ -138,7 +151,19 @@ export function AppShell({ children }: AppShellProps) {
                       <Icon className="h-4.5 w-4.5 shrink-0" aria-hidden="true" />
                       <span>{item.label}</span>
                     </span>
-                    {item.badge && (
+                    {item.locked ? (
+                      <span
+                        title="Requiere iniciar sesión"
+                        className={`inline-flex h-5 w-5 items-center justify-center rounded-full ${
+                          isActive
+                            ? 'bg-white/20 text-white'
+                            : 'bg-canvas-deep/80 text-ink-subtle'
+                        }`}
+                      >
+                        <Lock className="h-3 w-3" aria-hidden="true" />
+                        <span className="sr-only">Bloqueado para invitados</span>
+                      </span>
+                    ) : item.badge ? (
                       <span
                         className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-bold num-tabular ${
                           isActive
@@ -150,7 +175,7 @@ export function AppShell({ children }: AppShellProps) {
                       >
                         {item.badge}
                       </span>
-                    )}
+                    ) : null}
                   </>
                 )}
               </NavLink>
@@ -162,9 +187,17 @@ export function AppShell({ children }: AppShellProps) {
             <button
               type="button"
               onClick={() => openLogPlayModal()}
-              className="w-full inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-terracotta-200 bg-terracotta-50 px-3 text-xs font-bold text-terracotta-700 hover:bg-terracotta-100 transition"
+              className={`w-full inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-3 text-xs font-bold transition ${
+                isAuthenticated
+                  ? 'border-terracotta-200 bg-terracotta-50 text-terracotta-700 hover:bg-terracotta-100'
+                  : 'border-border bg-canvas-subtle/80 text-ink-muted hover:bg-canvas-deep hover:text-ink'
+              }`}
             >
-              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+              {isAuthenticated ? (
+                <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <Lock className="h-3.5 w-3.5 text-ink-subtle" aria-hidden="true" />
+              )}
               Registrar partida
             </button>
           </div>
@@ -234,7 +267,7 @@ export function AppShell({ children }: AppShellProps) {
 
                 <button
                   type="button"
-                  onClick={() => void signOut()}
+                  onClick={() => void handleSignOut()}
                   className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-bold text-ink-muted hover:bg-canvas-subtle hover:text-terracotta-600 transition shrink-0"
                 >
                   <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
@@ -244,22 +277,43 @@ export function AppShell({ children }: AppShellProps) {
             </div>
           ) : (
             <>
-              <div className="flex items-center gap-3 rounded-xl bg-surface border border-border/80 p-2.5">
-                <span
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
-                  style={{ backgroundColor: currentUser.accentColor }}
-                >
-                  {currentUser.initials}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-bold text-ink truncate">
-                    {currentUser.displayName}
-                  </p>
-                  <p className="flex items-center gap-1 text-[11px] font-medium text-ink-subtle truncate">
-                    <span>Sin sesión iniciada</span>
-                  </p>
+              <div className="rounded-xl bg-surface border border-border/80 p-2.5 space-y-2">
+                <div className="flex items-center gap-3">
+                  <span
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
+                    style={{ backgroundColor: currentUser.accentColor }}
+                  >
+                    {currentUser.initials}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold text-ink truncate">
+                      {currentUser.displayName}
+                    </p>
+                    <p className="text-[11px] font-medium text-ink-subtle truncate">
+                      {isGuestSession
+                        ? `Invitado${guestScope?.groupName ? ` · ${guestScope.groupName}` : ''}`
+                        : 'Modo invitado limitado'}
+                    </p>
+                  </div>
                 </div>
+
+                {isGuestSession && (
+                  <div className="flex items-center justify-between border-t border-border/70 pt-2">
+                    <span className="text-[11px] font-semibold text-terracotta-600">
+                      Juntada, propuestas y voto
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void handleSignOut()}
+                      className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-bold text-ink-muted hover:bg-canvas-subtle hover:text-terracotta-600 transition shrink-0"
+                    >
+                      <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Salir</span>
+                    </button>
+                  </div>
+                )}
               </div>
+
               <button
                 type="button"
                 disabled={authLoading}
@@ -308,7 +362,7 @@ export function AppShell({ children }: AppShellProps) {
               )}
               <button
                 type="button"
-                onClick={() => void signOut()}
+                onClick={() => void handleSignOut()}
                 aria-label="Cerrar sesión"
                 title="Cerrar sesión"
                 className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border bg-surface text-ink-muted hover:text-terracotta-600 transition"
@@ -317,15 +371,28 @@ export function AppShell({ children }: AppShellProps) {
               </button>
             </>
           ) : (
-            <button
-              type="button"
-              disabled={authLoading}
-              onClick={() => openAuthModal('signin')}
-              className="inline-flex min-h-8 items-center gap-1.5 rounded-full bg-forest-600 px-3 py-1 text-xs font-bold text-white shadow-xs hover:bg-forest-700 disabled:opacity-60 transition"
-            >
-              <LogIn className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>Ingresar</span>
-            </button>
+            <div className="flex items-center gap-1.5">
+              {isGuestSession && (
+                <button
+                  type="button"
+                  onClick={() => void handleSignOut()}
+                  aria-label="Salir del modo invitado"
+                  title="Salir del modo invitado"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border bg-surface text-ink-muted hover:text-terracotta-600 transition"
+                >
+                  <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={authLoading}
+                onClick={() => openAuthModal('signin')}
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-full bg-forest-600 px-3 py-1 text-xs font-bold text-white shadow-xs hover:bg-forest-700 disabled:opacity-60 transition"
+              >
+                <LogIn className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Ingresar</span>
+              </button>
+            </div>
           )}
         </div>
       </header>
@@ -338,18 +405,27 @@ export function AppShell({ children }: AppShellProps) {
               <div className="flex items-center gap-2 min-w-0">
                 <Dices className="h-4 w-4 shrink-0 text-forest-600" aria-hidden="true" />
                 <span className="font-medium">
-                  Iniciá sesión con tu cuenta para cargar tu ludoteca de BGG, tus grupos,
-                  juntadas e historial desde el servidor.
+                  {isGuestSession
+                    ? `Entraste como invitado (${currentUser.displayName}) para acceder a la juntada, proponer juegos y votar. Iniciá sesión para desbloquear tu ludoteca, grupos e historial.`
+                    : 'Estás en modo invitado limitado. Iniciá sesión para crear grupos, importar tu ludoteca y ver el historial.'}
                 </span>
               </div>
-              <button
-                type="button"
-                onClick={() => openAuthModal('signin')}
-                className="inline-flex min-h-8 items-center gap-1.5 rounded-lg bg-forest-600 px-3 py-1 text-xs font-bold text-white hover:bg-forest-700 transition shrink-0"
-              >
-                <LogIn className="h-3.5 w-3.5" aria-hidden="true" />
-                Iniciar sesión
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <Link
+                  to="/welcome"
+                  className="inline-flex min-h-8 items-center rounded-lg px-2.5 py-1 text-xs font-semibold text-forest-700 hover:bg-forest-100/80 transition"
+                >
+                  Ver portada
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => openAuthModal('signin')}
+                  className="inline-flex min-h-8 items-center gap-1.5 rounded-lg bg-forest-600 px-3 py-1 text-xs font-bold text-white hover:bg-forest-700 transition shrink-0"
+                >
+                  <LogIn className="h-3.5 w-3.5" aria-hidden="true" />
+                  Iniciar sesión
+                </button>
+              </div>
             </div>
           )}
           {isAuthenticated && backendSyncStatus === 'offline' && (
@@ -378,12 +454,12 @@ export function AppShell({ children }: AppShellProps) {
         </div>
       </main>
 
-      {/* Mobile Bottom Navigation (3 clean items; Groups lives in Top Header Switcher) */}
+      {/* Mobile Bottom Navigation (keeps all 4 sections accessible in the menu) */}
       <nav
         aria-label="Navegación inferior"
         className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-40 lg:hidden border-t border-border bg-surface/95 backdrop-blur-md shadow-[0_-4px_20px_rgba(31,36,33,0.06)]"
       >
-        <ul className="mx-auto grid max-w-md grid-cols-3 gap-1 pt-1.5">
+        <ul className="mx-auto grid max-w-md grid-cols-4 gap-1 pt-1.5">
           {mobileNavItems.map((item) => {
             const Icon = item.icon;
             return (
@@ -401,14 +477,18 @@ export function AppShell({ children }: AppShellProps) {
                   {({ isActive }) => (
                     <>
                       <span
-                        className={`relative flex h-7 w-14 items-center justify-center rounded-full transition-colors ${
+                        className={`relative flex h-7 w-12 items-center justify-center rounded-full transition-colors ${
                           isActive ? 'bg-forest-100 text-forest-700' : ''
                         }`}
                       >
                         <Icon className="h-4.5 w-4.5" aria-hidden="true" />
-                        {item.badgeTone === 'terracotta' && item.badge && (
-                          <span className="absolute right-3 top-1 h-2 w-2 rounded-full bg-terracotta-500 ring-2 ring-surface" />
-                        )}
+                        {item.locked ? (
+                          <span className="absolute right-1.5 top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-canvas-deep text-ink-subtle ring-1 ring-surface">
+                            <Lock className="h-2.5 w-2.5" aria-hidden="true" />
+                          </span>
+                        ) : item.badgeTone === 'terracotta' && item.badge ? (
+                          <span className="absolute right-2.5 top-1 h-2 w-2 rounded-full bg-terracotta-500 ring-2 ring-surface" />
+                        ) : null}
                       </span>
                       <span>{item.shortLabel}</span>
                     </>

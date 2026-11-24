@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { authenticate } from '../../middleware/auth.js';
+import { authenticate, requireRegisteredUser } from '../../middleware/auth.js';
 import {
   libraryGameParamsSchema,
   listLibraryQuerySchema,
@@ -15,6 +15,7 @@ import {
 
 export async function libraryRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', authenticate);
+  app.addHook('preHandler', requireRegisteredUser);
 
   app.get('/', async (request) => {
     const query = listLibraryQuerySchema.parse(request.query);

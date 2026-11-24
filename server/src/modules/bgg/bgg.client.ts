@@ -36,6 +36,7 @@ export interface BggClientConfig {
   collectionInitialDelayMs?: number;
   collectionMaxDelayMs?: number;
   thingBatchDelayMs?: number;
+  requestTimeoutMs?: number;
 }
 
 function parseRetryAfterHeader(headerValue: string | null): number | undefined {
@@ -61,6 +62,7 @@ export class BggClient {
   private readonly collectionInitialDelayMs: number;
   private readonly collectionMaxDelayMs: number;
   private readonly thingBatchDelayMs: number;
+  private readonly requestTimeoutMs: number;
 
   constructor(config: BggClientConfig = {}) {
     const env = config.baseUrl ? null : getEnv();
@@ -72,6 +74,7 @@ export class BggClient {
     this.collectionInitialDelayMs = config.collectionInitialDelayMs ?? 1500;
     this.collectionMaxDelayMs = config.collectionMaxDelayMs ?? 12000;
     this.thingBatchDelayMs = config.thingBatchDelayMs ?? INTER_BATCH_DELAY_MS;
+    this.requestTimeoutMs = config.requestTimeoutMs ?? env?.BGG_REQUEST_TIMEOUT_MS ?? 15000;
   }
 
   private buildHeaders(): Record<string, string> {
@@ -108,6 +111,7 @@ export class BggClient {
             response = await this.fetchFn(url, {
               method: 'GET',
               headers: this.buildHeaders(),
+              signal: AbortSignal.timeout(this.requestTimeoutMs),
             });
           } catch (networkError) {
             throw new RetryableBggHttpError(

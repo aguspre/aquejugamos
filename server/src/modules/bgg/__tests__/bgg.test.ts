@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import { hashPassword, verifyPassword } from '../../../utils/password.js';
 import { BggClient } from '../bgg.client.js';
+import { BggGuard } from '../bgg.guard.js';
 import {
   parseBggCollectionXml,
   parseBggSearchXml,
   parseBggThingXml,
 } from '../bgg.parser.js';
+import {
+  bggImportParamsSchema,
+  bggSearchQuerySchema,
+  bggUsernameSchema,
+} from '../bgg.schemas.js';
 
 const SAMPLE_COLLECTION_XML = `<?xml version="1.0" encoding="utf-8"?>
 <items totalitems="2" termsofuse="https://boardgamegeek.com/xmlapi/termsofuse">
@@ -222,5 +228,189 @@ describe('Password hashing', () => {
     expect(hash).toContain(':');
     expect(await verifyPassword('MiClaveSegura123!', hash)).toBe(true);
     expect(await verifyPassword('OtraClave', hash)).toBe(false);
+  });
+});
+
+describe('BggGuard (cuota diaria, cooldown, concurrencia, cache y rate limits)', () => {
+  it('limita la sincronización de biblioteca a 2 veces cada 24 horas y se reinicia pasado el día', () => {
+    let now = Date.UTC(2026, 10, 24, 12, 0, 0);
+    const guard = new BggGuard({
+      maxSyncsPerDay: 2,
+      sameUserCooldownMs: 5 * 60 * 1000,
+      searchRateLimitPerMin: 15,
+      importRateLimitPerHour: 30,
+      searchCacheTtlMs: 15 * 60 * 1000,
+      nowFn: () => now,
+    });
+
+    // 1ra sincronización
+    const slot1 = guard.acquireSyncSlot('user-1', 'agus_bg');
+    slot1.release(true);
+    expect(guard.getSyncQuota('user-1')).toMatchObject({
+      dailyLimit: 2,
+      usedToday: 1,
+      remainingToday: 1,
+    });
+
+    // Avanzamos 10 min (pasa el cooldown de 5 min) -> 2da sincronización
+    now += 10 * 60 * 1000;
+    const slot2 = guard.acquireSyncSlot('user-1', 'agus_bg');
+    slot2.release(true);
+    expect(guard.getSyncQuota('user-1')).toMatchObject({
+      dailyLimit: 2,
+      usedToday: 2,
+      remainingToday: 0,
+    });
+
+    // 3ra sincronización el mismo día -> bloqueada con 429
+    now += 10 * 60 * 1000;
+    expect(() => guard.acquireSyncSlot('user-1', 'agus_bg')).toThrowError(
+      expect.objectContaining({
+        statusCode: 429,
+        code: 'BGG_DAILY_SYNC_LIMIT_REACHED',
+      }),
+    );
+
+    // Pasadas 24 horas desde la primera -> vuelve a tener 1 cupo disponible
+    now = Date.UTC(2026, 10, 25, 12, 0, 1);
+    const slot3 = guard.acquireSyncSlot('user-1', 'agus_bg');
+    slot3.release(true);
+    expect(guard.getSyncQuota('user-1').remainingToday).toBe(0);
+  });
+
+  it('aplica cooldown de 5 minutos para el mismo usuario BGG pero permite corregir otro usuario', () => {
+    let now = Date.UTC(2026, 10, 24, 12, 0, 0);
+    const guard = new BggGuard({
+      maxSyncsPerDay: 2,
+      sameUserCooldownMs: 5 * 60 * 1000,
+      searchRateLimitPerMin: 15,
+      importRateLimitPerHour: 30,
+      searchCacheTtlMs: 15 * 60 * 1000,
+      nowFn: () => now,
+    });
+
+    const slot1 = guard.acquireSyncSlot('user-1', 'agus_bg');
+    slot1.release(true);
+
+    // 1 minuto después con el mismo username -> 429 cooldown sin quemar el 2do cupo
+    now += 60 * 1000;
+    expect(() => guard.acquireSyncSlot('user-1', 'AGUS_BG')).toThrowError(
+      expect.objectContaining({
+        statusCode: 429,
+        code: 'BGG_SYNC_COOLDOWN',
+      }),
+    );
+    expect(guard.getSyncQuota('user-1').remainingToday).toBe(1);
+
+    // Si corrige el username, puede usar su 2do cupo inmediatamente
+    const slot2 = guard.acquireSyncSlot('user-1', 'agus_real');
+    slot2.release(true);
+    expect(guard.getSyncQuota('user-1').remainingToday).toBe(0);
+  });
+
+  it('bloquea sincronizaciones concurrentes (409) y no consume cupo si falla', () => {
+    const guard = new BggGuard({
+      maxSyncsPerDay: 2,
+      sameUserCooldownMs: 0,
+      searchRateLimitPerMin: 15,
+      importRateLimitPerHour: 30,
+      searchCacheTtlMs: 15 * 60 * 1000,
+    });
+
+    const slot = guard.acquireSyncSlot('user-1', 'agus_bg');
+    expect(() => guard.acquireSyncSlot('user-1', 'agus_bg')).toThrowError(
+      expect.objectContaining({
+        statusCode: 409,
+        code: 'BGG_SYNC_IN_PROGRESS',
+      }),
+    );
+
+    // Si falla el sync, no consume cupo
+    slot.release(false);
+    expect(guard.getSyncQuota('user-1').usedToday).toBe(0);
+  });
+
+  it('siembra cuota desde lastBggSyncAt persistido en DB tras reinicio del servidor', () => {
+    const now = Date.UTC(2026, 10, 24, 15, 0, 0);
+    const lastSyncAt = new Date(now - 2 * 60 * 60 * 1000); // hace 2 horas
+    const guard = new BggGuard({
+      maxSyncsPerDay: 2,
+      sameUserCooldownMs: 5 * 60 * 1000,
+      searchRateLimitPerMin: 15,
+      importRateLimitPerHour: 30,
+      searchCacheTtlMs: 15 * 60 * 1000,
+      nowFn: () => now,
+    });
+
+    expect(guard.getSyncQuota('user-1', lastSyncAt, 'agus_bg')).toMatchObject({
+      usedToday: 1,
+      remainingToday: 1,
+    });
+  });
+
+  it('cachea y deduplica búsquedas en vuelo y aplica rate limit por minuto', async () => {
+    const guard = new BggGuard({
+      maxSyncsPerDay: 2,
+      sameUserCooldownMs: 0,
+      searchRateLimitPerMin: 2,
+      importRateLimitPerHour: 2,
+      searchCacheTtlMs: 15 * 60 * 1000,
+    });
+
+    const fetcher = vi.fn(async () => [
+      { bggId: 13, name: 'CATAN', yearPublished: 1995, isExpansion: false },
+    ]);
+
+    // Dos búsquedas concurrentes iguales (con espacios/mayúsculas distintas) solo disparan 1 llamada
+    const [r1, r2] = await Promise.all([
+      guard.getOrFetchSearch('  Catan ', false, fetcher),
+      guard.getOrFetchSearch('catan', false, fetcher),
+    ]);
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(r1.results).toHaveLength(1);
+    expect(r2.results).toHaveLength(1);
+
+    // Tercera búsqueda lee de cache
+    const r3 = await guard.getOrFetchSearch('CATAN', false, fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(r3.fromCache).toBe(true);
+
+    // Rate limit de búsqueda: 2/min permitidas, la 3ra devuelve 429
+    guard.assertSearchRateLimit('user-1');
+    guard.assertSearchRateLimit('user-1');
+    expect(() => guard.assertSearchRateLimit('user-1')).toThrowError(
+      expect.objectContaining({
+        statusCode: 429,
+        code: 'BGG_SEARCH_RATE_LIMITED',
+      }),
+    );
+
+    // Rate limit de importación individual: 2/hora permitidas, la 3ra devuelve 429
+    guard.assertUpstreamImportRateLimit('user-1');
+    guard.assertUpstreamImportRateLimit('user-1');
+    expect(() => guard.assertUpstreamImportRateLimit('user-1')).toThrowError(
+      expect.objectContaining({
+        statusCode: 429,
+        code: 'BGG_IMPORT_RATE_LIMITED',
+      }),
+    );
+  });
+});
+
+describe('BGG strict schemas', () => {
+  it('rechaza caracteres peligrosos en bggUsername y queries vacías de símbolos', () => {
+    expect(bggUsernameSchema.safeParse('agus_bg-2').success).toBe(true);
+    expect(bggUsernameSchema.safeParse('bad/user?x=1').success).toBe(false);
+    expect(bggUsernameSchema.safeParse('a').success).toBe(false);
+
+    expect(bggSearchQuerySchema.safeParse({ query: '  Wingspan  ' })).toMatchObject({
+      success: true,
+      data: { query: 'Wingspan' },
+    });
+    expect(bggSearchQuerySchema.safeParse({ query: '...' }).success).toBe(false);
+
+    expect(bggImportParamsSchema.safeParse({ bggId: '266192' }).success).toBe(true);
+    expect(bggImportParamsSchema.safeParse({ bggId: '999999999' }).success).toBe(false);
   });
 });

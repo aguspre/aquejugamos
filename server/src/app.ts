@@ -44,6 +44,23 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof AppError) {
+      if (
+        error.statusCode === 429 &&
+        error.details &&
+        typeof error.details === 'object' &&
+        'retryAfterSeconds' in error.details &&
+        typeof (error.details as { retryAfterSeconds?: unknown }).retryAfterSeconds ===
+          'number'
+      ) {
+        const retryAfter = Math.max(
+          1,
+          Math.ceil(
+            (error.details as { retryAfterSeconds: number }).retryAfterSeconds,
+          ),
+        );
+        reply.header('Retry-After', String(retryAfter));
+      }
+
       return reply.status(error.statusCode).send({
         error: {
           code: error.code,
