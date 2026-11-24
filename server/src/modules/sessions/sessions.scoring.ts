@@ -33,6 +33,34 @@ export interface UserVoteQuotaSummary {
   lockedRanks: number[];
 }
 
+export interface UserProposalQuotaSummary {
+  userProposalsCount: number;
+  maxProposalsPerUser: number | null;
+  proposalsRemaining: number | null;
+}
+
+export function computeUserProposalQuota(
+  proposals: { proposedById: string }[],
+  viewerUserId: string,
+  maxProposalsPerUser: number | null,
+): UserProposalQuotaSummary {
+  let userProposalsCount = 0;
+  for (const proposal of proposals) {
+    if (proposal.proposedById === viewerUserId) {
+      userProposalsCount += 1;
+    }
+  }
+
+  return {
+    userProposalsCount,
+    maxProposalsPerUser,
+    proposalsRemaining:
+      maxProposalsPerUser !== null
+        ? Math.max(0, maxProposalsPerUser - userProposalsCount)
+        : null,
+  };
+}
+
 export function getPointsForVote(votingMode: VotingMode, rank: number): number {
   if (votingMode === 'ranked_top3') {
     if (rank === 1) return 3;

@@ -200,18 +200,19 @@ model GroupMember {
 // ============================================================================
 
 model Session {
-  id              String        @id @default(uuid()) @db.Uuid
-  groupId         String?       @map("group_id") @db.Uuid
-  hostId          String        @map("host_id") @db.Uuid
-  title           String
-  scheduledAt     DateTime      @map("scheduled_at")
-  location        String?
-  status          SessionStatus @default(planning)
-  votingMode      VotingMode    @default(multi_vote) @map("voting_mode")
-  maxVotesPerUser Int           @default(3) @map("max_votes_per_user")
-  inviteToken     String        @unique @map("invite_token")
-  createdAt       DateTime      @default(now()) @map("created_at")
-  updatedAt       DateTime      @updatedAt @map("updated_at")
+  id                  String        @id @default(uuid()) @db.Uuid
+  groupId             String?       @map("group_id") @db.Uuid
+  hostId              String        @map("host_id") @db.Uuid
+  title               String
+  scheduledAt         DateTime      @map("scheduled_at")
+  location            String?
+  status              SessionStatus @default(planning)
+  votingMode          VotingMode    @default(multi_vote) @map("voting_mode")
+  maxVotesPerUser     Int           @default(3) @map("max_votes_per_user")
+  maxProposalsPerUser Int?          @map("max_proposals_per_user")
+  inviteToken         String        @unique @map("invite_token")
+  createdAt           DateTime      @default(now()) @map("created_at")
+  updatedAt           DateTime      @updatedAt @map("updated_at")
 
   group        Group?               @relation(fields: [groupId], references: [id], onDelete: SetNull)
   host         User                 @relation("SessionHost", fields: [hostId], references: [id], onDelete: Restrict)
@@ -264,6 +265,7 @@ model SessionProposal {
   @@unique([sessionId, gameId])
   @@index([sessionId])
   @@index([sessionId, status])
+  @@index([sessionId, proposedBy])
   @@index([gameId])
   @@map("session_proposals")
 }

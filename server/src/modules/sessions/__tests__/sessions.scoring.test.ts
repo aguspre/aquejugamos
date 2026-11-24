@@ -4,8 +4,10 @@ import {
   generateGroupInviteCode,
   generateSessionInviteToken,
 } from '../../../utils/tokens.js';
+import { createSessionSchema } from '../sessions.schemas.js';
 import {
   aggregateCombinedPool,
+  computeUserProposalQuota,
   computeUserVoteQuota,
   scoreProposalVotes,
   sortAcceptedProposals,
@@ -238,6 +240,65 @@ describe('Session voting scoring', () => {
       lockedVotesCount: 0,
       lockedRanks: [],
     });
+  });
+
+  it('calcula el cupo de propuestas por integrante (ilimitado, disponible, agotado y liberado)', () => {
+    const proposals = [
+      { proposedById: 'u-agus' },
+      { proposedById: 'u-lucas' },
+      { proposedById: 'u-agus' },
+    ];
+
+    expect(computeUserProposalQuota(proposals, 'u-agus', null)).toEqual({
+      userProposalsCount: 2,
+      maxProposalsPerUser: null,
+      proposalsRemaining: null,
+    });
+
+    expect(computeUserProposalQuota(proposals, 'u-agus', 3)).toEqual({
+      userProposalsCount: 2,
+      maxProposalsPerUser: 3,
+      proposalsRemaining: 1,
+    });
+
+    expect(computeUserProposalQuota(proposals, 'u-agus', 2)).toEqual({
+      userProposalsCount: 2,
+      maxProposalsPerUser: 2,
+      proposalsRemaining: 0,
+    });
+
+    expect(computeUserProposalQuota(proposals, 'u-lucas', 2)).toEqual({
+      userProposalsCount: 1,
+      maxProposalsPerUser: 2,
+      proposalsRemaining: 1,
+    });
+  });
+
+  it('valida maxProposalsPerUser opcional en createSessionSchema', () => {
+    const base = {
+      title: 'Viernes de mesa',
+      scheduledAt: '2026-11-27T21:00:00.000Z',
+    };
+
+    expect(createSessionSchema.parse(base).maxProposalsPerUser).toBeNull();
+    expect(
+      createSessionSchema.parse({ ...base, maxProposalsPerUser: null }).maxProposalsPerUser,
+    ).toBeNull();
+    expect(
+      createSessionSchema.parse({ ...base, maxProposalsPerUser: 2 }).maxProposalsPerUser,
+    ).toBe(2);
+    expect(
+      createSessionSchema.safeParse({ ...base, maxProposalsPerUser: 0 }).success,
+    ).toBe(false);
+    expect(
+      createSessionSchema.safeParse({ ...base, maxProposalsPerUser: -1 }).success,
+    ).toBe(false);
+    expect(
+      createSessionSchema.safeParse({ ...base, maxProposalsPerUser: 21 }).success,
+    ).toBe(false);
+    expect(
+      createSessionSchema.safeParse({ ...base, maxProposalsPerUser: 1.5 }).success,
+    ).toBe(false);
   });
 });
 

@@ -19,6 +19,7 @@ import type {
 } from './sessions.schemas.js';
 import {
   aggregateCombinedPool,
+  computeUserProposalQuota,
   computeUserVoteQuota,
   scoreProposalVotes,
   sortAcceptedProposals,
@@ -282,6 +283,7 @@ export async function listUserSessions(
       status: session.status,
       votingMode: session.votingMode,
       maxVotesPerUser: session.maxVotesPerUser,
+      maxProposalsPerUser: session.maxProposalsPerUser,
       inviteToken: session.inviteToken,
       host: session.host,
       confirmedCount: session.participants.filter((p) => p.rsvp === RsvpStatus.going)
@@ -346,6 +348,7 @@ export async function createSession(userId: string, input: CreateSessionInput) {
       status: input.status,
       votingMode: input.votingMode,
       maxVotesPerUser: normalizedMaxVotes,
+      maxProposalsPerUser: input.maxProposalsPerUser ?? null,
       inviteToken: generateSessionInviteToken(),
       participants: {
         createMany: {
@@ -519,6 +522,11 @@ export async function getSessionDetail(
     session.votingMode,
     session.maxVotesPerUser,
   );
+  const proposalQuota = computeUserProposalQuota(
+    session.proposals.map((p) => ({ proposedById: p.proposedBy })),
+    userId,
+    session.maxProposalsPerUser,
+  );
 
   return {
     id: session.id,
@@ -530,6 +538,9 @@ export async function getSessionDetail(
     status: session.status,
     votingMode: session.votingMode,
     maxVotesPerUser: session.maxVotesPerUser,
+    maxProposalsPerUser: proposalQuota.maxProposalsPerUser,
+    userProposalsCount: proposalQuota.userProposalsCount,
+    proposalsRemaining: proposalQuota.proposalsRemaining,
     inviteToken: session.inviteToken,
     host: session.host,
     canManageSession: !scope?.isGuest && (isHost || isGroupAdmin),
@@ -704,56 +715,143 @@ export async function proposeGameForSession(
   input: CreateProposalInput,
   scope?: SessionAccessScope,
 ) {
-  const { session } = await assertSessionAccess(userId, sessionId, scope);
+  await prisma.$transaction(
+    async (tx) => {
+      // Lock session row (FOR SHARE) so concurrent status changes cannot race with proposing
+      const sessionRows = await tx.$queryRaw<
+        {
+          id: string;
+          group_id: string | null;
+          host_id: string;
+          status: SessionStatus;
+          max_proposals_per_user: number | null;
+        }[]
+      >`
+      SELECT id, group_id, host_id, status, max_proposals_per_user
+      FROM sessions
+      WHERE id = ${sessionId}::uuid
+      FOR SHARE
+    `;
 
-  if (
-    session.status === SessionStatus.locked ||
-    session.status === SessionStatus.completed ||
-    session.status === SessionStatus.cancelled
-  ) {
-    throw badRequest(
-      'La votación está cerrada y no se pueden agregar nuevas propuestas',
-      undefined,
-      'SESSION_VOTING_CLOSED',
-    );
-  }
+      const lockedSession = sessionRows[0];
+      if (!lockedSession) {
+        throw notFound('Juntada no encontrada', 'SESSION_NOT_FOUND');
+      }
 
-  const game = await prisma.game.findUnique({
-    where: { id: input.gameId },
-    select: { id: true },
-  });
+      const [participant, membership] = await Promise.all([
+        tx.sessionParticipant.findUnique({
+          where: { sessionId_userId: { sessionId, userId } },
+          select: { userId: true },
+        }),
+        lockedSession.group_id
+          ? tx.groupMember.findUnique({
+              where: {
+                groupId_userId: { groupId: lockedSession.group_id, userId },
+              },
+              select: { role: true },
+            })
+          : Promise.resolve(null),
+      ]);
 
-  if (!game) {
-    throw notFound('El juego seleccionado no existe en el catálogo', 'GAME_NOT_FOUND');
-  }
+      const isHost = lockedSession.host_id === userId;
+      const isParticipant = Boolean(participant);
+      const isGroupMember = Boolean(membership);
+      const isInvitedGuest = Boolean(
+        scope?.isGuest &&
+          ((scope.guestGroupId && lockedSession.group_id === scope.guestGroupId) ||
+            (scope.guestSessionId && lockedSession.id === scope.guestSessionId)),
+      );
 
-  const existing = await prisma.sessionProposal.findUnique({
-    where: {
-      sessionId_gameId: { sessionId, gameId: input.gameId },
+      if (!isHost && !isParticipant && !isGroupMember && !isInvitedGuest) {
+        throw forbidden('No tenés acceso a esta juntada', 'SESSION_ACCESS_DENIED');
+      }
+
+      if (
+        lockedSession.status !== SessionStatus.voting &&
+        lockedSession.status !== SessionStatus.planning
+      ) {
+        throw badRequest(
+          'La votación está cerrada y no se pueden agregar nuevas propuestas',
+          undefined,
+          'SESSION_VOTING_CLOSED',
+        );
+      }
+
+      // Serialize concurrent proposals by the same user within this session when a limit applies.
+      // Must use $executeRaw (not $queryRaw) because pg_advisory_xact_lock returns PostgreSQL void.
+      if (lockedSession.max_proposals_per_user !== null) {
+        await tx.$executeRaw`
+          SELECT pg_advisory_xact_lock(hashtext(${sessionId}), hashtext(${userId}))
+        `;
+      }
+
+      const [game, existing, userProposalCount] = await Promise.all([
+        tx.game.findUnique({
+          where: { id: input.gameId },
+          select: { id: true },
+        }),
+        tx.sessionProposal.findUnique({
+          where: {
+            sessionId_gameId: { sessionId, gameId: input.gameId },
+          },
+          select: { id: true },
+        }),
+        lockedSession.max_proposals_per_user !== null
+          ? tx.sessionProposal.count({
+              where: { sessionId, proposedBy: userId },
+            })
+          : Promise.resolve(0),
+      ]);
+
+      if (!game) {
+        throw notFound('El juego seleccionado no existe en el catálogo', 'GAME_NOT_FOUND');
+      }
+
+      if (existing) {
+        throw conflict('Ese juego ya fue propuesto en esta juntada', 'DUPLICATE_PROPOSAL');
+      }
+
+      if (
+        lockedSession.max_proposals_per_user !== null &&
+        userProposalCount >= lockedSession.max_proposals_per_user
+      ) {
+        const limit = lockedSession.max_proposals_per_user;
+        throw badRequest(
+          `Ya alcanzaste el límite de ${limit} ${limit === 1 ? 'propuesta' : 'propuestas'} por integrante en esta juntada`,
+          {
+            maxProposalsPerUser: limit,
+            userProposalsCount: userProposalCount,
+          },
+          'MAX_PROPOSALS_REACHED',
+        );
+      }
+
+      if (scope?.isGuest && !isParticipant) {
+        await tx.sessionParticipant.upsert({
+          where: { sessionId_userId: { sessionId, userId } },
+          update: {},
+          create: { sessionId, userId, rsvp: RsvpStatus.going },
+        });
+      }
+
+      try {
+        await tx.sessionProposal.create({
+          data: {
+            sessionId,
+            gameId: input.gameId,
+            proposedBy: userId,
+            note: input.note ?? null,
+          },
+        });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+          throw conflict('Ese juego ya fue propuesto en esta juntada', 'DUPLICATE_PROPOSAL');
+        }
+        throw error;
+      }
     },
-    select: { id: true },
-  });
-
-  if (existing) {
-    throw conflict('Ese juego ya fue propuesto en esta juntada', 'DUPLICATE_PROPOSAL');
-  }
-
-  if (scope?.isGuest) {
-    await prisma.sessionParticipant.upsert({
-      where: { sessionId_userId: { sessionId, userId } },
-      update: {},
-      create: { sessionId, userId, rsvp: RsvpStatus.going },
-    });
-  }
-
-  await prisma.sessionProposal.create({
-    data: {
-      sessionId,
-      gameId: input.gameId,
-      proposedBy: userId,
-      note: input.note ?? null,
-    },
-  });
+    { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+  );
 
   return getSessionDetail(userId, sessionId, scope);
 }

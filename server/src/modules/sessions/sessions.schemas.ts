@@ -26,6 +26,14 @@ export const createSessionSchema = z.object({
   status: z.nativeEnum(SessionStatus).optional().default(SessionStatus.voting),
   votingMode: z.nativeEnum(VotingMode).optional().default(VotingMode.multi_vote),
   maxVotesPerUser: z.coerce.number().int().min(1).max(10).optional().default(3),
+  maxProposalsPerUser: z
+    .number()
+    .int('El límite de propuestas debe ser un número entero')
+    .min(1, 'El mínimo es 1 propuesta por integrante')
+    .max(20, 'El máximo es 20 propuestas por integrante')
+    .nullable()
+    .optional()
+    .default(null),
 });
 
 export const sessionIdParamsSchema = z.object({

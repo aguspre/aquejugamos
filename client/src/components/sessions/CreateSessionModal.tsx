@@ -71,12 +71,14 @@ export function CreateSessionModal({
   );
   const [votingMode, setVotingMode] = useState<VotingMode>('multi_vote');
   const [maxVotesPerUser, setMaxVotesPerUser] = useState(3);
+  const [maxProposalsPerUser, setMaxProposalsPerUser] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
       setSelectedGroupId(activeGroup?.id ?? '__direct__');
+      setMaxProposalsPerUser(null);
       setError(null);
     }
   }, [open, activeGroup?.id]);
@@ -112,10 +114,12 @@ export function CreateSessionModal({
         groupName: chosenGroup?.name ?? 'Invitación abierta por link',
         votingMode,
         maxVotesPerUser,
+        maxProposalsPerUser,
       });
 
       setTitle('');
       setLocation('');
+      setMaxProposalsPerUser(null);
       onClose();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'No se pudo crear la juntada');
@@ -339,6 +343,7 @@ export function CreateSessionModal({
                     <button
                       key={count}
                       type="button"
+                      aria-pressed={maxVotesPerUser === count}
                       onClick={() => setMaxVotesPerUser(count)}
                       className={`h-8 w-8 rounded-lg text-xs font-bold num-tabular transition ${
                         maxVotesPerUser === count
@@ -352,6 +357,49 @@ export function CreateSessionModal({
                 </div>
               </div>
             )}
+
+            {/* Optional Proposal Limit Per Participant */}
+            <div className="mt-2 space-y-2 rounded-xl border border-border bg-canvas/70 px-3.5 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <span className="block text-xs font-semibold text-ink">
+                    Límite de propuestas por integrante
+                  </span>
+                  <span className="block text-[11px] text-ink-muted">
+                    Opcional · Evita dispersar los votos entre demasiados juegos.
+                  </span>
+                </div>
+                <div
+                  className="flex flex-wrap items-center gap-1.5"
+                  role="group"
+                  aria-label="Límite de propuestas por integrante"
+                >
+                  {([null, 1, 2, 3, 4, 5] as const).map((limit) => {
+                    const active = maxProposalsPerUser === limit;
+                    return (
+                      <button
+                        key={limit === null ? 'unlimited' : limit}
+                        type="button"
+                        aria-pressed={active}
+                        aria-label={
+                          limit === null
+                            ? 'Sin límite de propuestas por integrante'
+                            : `Máximo ${limit} ${limit === 1 ? 'propuesta' : 'propuestas'} por integrante`
+                        }
+                        onClick={() => setMaxProposalsPerUser(limit)}
+                        className={`min-h-9 min-w-9 rounded-lg px-2.5 text-xs font-bold num-tabular transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-forest-600 focus-visible:ring-offset-1 ${
+                          active
+                            ? 'bg-forest-600 text-white'
+                            : 'bg-surface border border-border text-ink-muted hover:border-border-strong'
+                        }`}
+                      >
+                        {limit === null ? 'Sin límite' : limit}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Footer Buttons */}

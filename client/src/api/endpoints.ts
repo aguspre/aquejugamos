@@ -266,6 +266,7 @@ export const sessionsApi = {
     location?: string | null;
     votingMode: VotingMode;
     maxVotesPerUser: number;
+    maxProposalsPerUser?: number | null;
   }) =>
     apiRequest<{ session: ApiSessionDetail }>('/api/sessions', {
       method: 'POST',

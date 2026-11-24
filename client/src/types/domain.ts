@@ -95,6 +95,9 @@ export interface GameSession {
   status: SessionStatus;
   votingMode: VotingMode;
   maxVotesPerUser: number;
+  maxProposalsPerUser?: number | null;
+  userProposalsCount?: number;
+  proposalsRemaining?: number | null;
   lockedVotesCount?: number;
   lockedRanks?: number[];
   inviteToken: string;
