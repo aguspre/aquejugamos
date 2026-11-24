@@ -11,11 +11,13 @@ import {
   sessionPoolQuerySchema,
   updateProposalStatusSchema,
   updateRsvpSchema,
+  updateSessionSchema,
   updateSessionStatusSchema,
 } from './sessions.schemas.js';
 import {
   castVote,
   createSession,
+  deleteSession,
   deleteSessionProposal,
   getSessionCombinedPool,
   getSessionDetail,
@@ -25,6 +27,7 @@ import {
   removeVote,
   updateParticipantRsvp,
   updateProposalStatus,
+  updateSession,
   updateSessionStatus,
   type SessionAccessScope,
 } from './sessions.service.js';
@@ -72,6 +75,27 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     );
     return { session };
   });
+
+  app.patch(
+    '/:sessionId',
+    { preHandler: [requireRegisteredUser] },
+    async (request) => {
+      const { sessionId } = sessionIdParamsSchema.parse(request.params);
+      const input = updateSessionSchema.parse(request.body);
+      const session = await updateSession(request.user.sub, sessionId, input);
+      return { session };
+    },
+  );
+
+  app.delete(
+    '/:sessionId',
+    { preHandler: [requireRegisteredUser] },
+    async (request, reply) => {
+      const { sessionId } = sessionIdParamsSchema.parse(request.params);
+      await deleteSession(request.user.sub, sessionId);
+      return reply.status(204).send();
+    },
+  );
 
   app.patch('/:sessionId/rsvp', async (request) => {
     const { sessionId } = sessionIdParamsSchema.parse(request.params);

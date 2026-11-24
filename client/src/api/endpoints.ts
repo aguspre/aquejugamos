@@ -273,6 +273,25 @@ export const sessionsApi = {
       body: payload,
     }),
 
+  update: (
+    sessionId: string,
+    payload: {
+      title?: string;
+      scheduledAt?: string;
+      location?: string | null;
+      maxProposalsPerUser?: number | null;
+    },
+  ) =>
+    apiRequest<{ session: ApiSessionDetail }>(`/api/sessions/${sessionId}`, {
+      method: 'PATCH',
+      body: payload,
+    }),
+
+  remove: (sessionId: string) =>
+    apiRequest<void>(`/api/sessions/${sessionId}`, {
+      method: 'DELETE',
+    }),
+
   joinByToken: (inviteToken: string, rsvp: RsvpStatus = 'going') =>
     apiRequest<{ session: ApiSessionDetail }>('/api/sessions/join', {
       method: 'POST',

@@ -65,6 +65,13 @@ export interface CreateSessionInput {
   maxProposalsPerUser?: number | null;
 }
 
+export interface UpdateSessionInput {
+  title?: string;
+  scheduledAt?: string;
+  location?: string | null;
+  maxProposalsPerUser?: number | null;
+}
+
 export interface CreatePlayLogInput {
   sessionId?: string;
   sessionTitle?: string;
@@ -120,6 +127,13 @@ interface AppStateContextValue {
   removeLibraryItem: (gameId: string) => Promise<void>;
   // Session actions
   createSession: (input: CreateSessionInput) => Promise<GameSession>;
+  updateSession: (
+    sessionId: string,
+    input: UpdateSessionInput,
+  ) => Promise<GameSession>;
+  cancelSession: (sessionId: string) => Promise<GameSession>;
+  reopenSession: (sessionId: string) => Promise<GameSession>;
+  deleteSession: (sessionId: string) => Promise<void>;
   joinSessionByToken: (
     inviteToken: string,
     rsvp?: RsvpStatus,
@@ -686,6 +700,54 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [ensureRegistered, upsertSession],
   );
 
+  const updateSession = useCallback(
+    async (
+      sessionId: string,
+      input: UpdateSessionInput,
+    ): Promise<GameSession> => {
+      ensureRegistered();
+      const { session } = await sessionsApi.update(sessionId, input);
+      const mapped = mapSessionDetail(session);
+      upsertSession(mapped);
+      return mapped;
+    },
+    [ensureRegistered, upsertSession],
+  );
+
+  const cancelSession = useCallback(
+    async (sessionId: string): Promise<GameSession> => {
+      ensureRegistered();
+      const { session } = await sessionsApi.updateStatus(
+        sessionId,
+        "cancelled",
+      );
+      const mapped = mapSessionDetail(session);
+      upsertSession(mapped);
+      return mapped;
+    },
+    [ensureRegistered, upsertSession],
+  );
+
+  const reopenSession = useCallback(
+    async (sessionId: string): Promise<GameSession> => {
+      ensureRegistered();
+      const { session } = await sessionsApi.updateStatus(sessionId, "voting");
+      const mapped = mapSessionDetail(session);
+      upsertSession(mapped);
+      return mapped;
+    },
+    [ensureRegistered, upsertSession],
+  );
+
+  const deleteSession = useCallback(
+    async (sessionId: string): Promise<void> => {
+      ensureRegistered();
+      await sessionsApi.remove(sessionId);
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    },
+    [ensureRegistered],
+  );
+
   const joinSessionByToken = useCallback(
     async (
       inviteToken: string,
@@ -970,6 +1032,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         updateLibraryItem,
         removeLibraryItem,
         createSession,
+        updateSession,
+        cancelSession,
+        reopenSession,
+        deleteSession,
         joinSessionByToken,
         loadSessionDetail,
         loadSessionPool,
