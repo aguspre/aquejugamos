@@ -281,6 +281,9 @@ export function SessionsHubPage() {
                         {session.votingMode === "multi_vote"
                           ? ` (hasta ${session.maxVotesPerUser})`
                           : ""}
+                        {session.maxProposalsPerUser != null
+                          ? ` · Máx. ${session.maxProposalsPerUser} ${session.maxProposalsPerUser === 1 ? "prop." : "props."}/pers.`
+                          : ""}
                       </span>
                     </div>
 

@@ -62,6 +62,7 @@ export interface CreateSessionInput {
   groupName: string;
   votingMode: VotingMode;
   maxVotesPerUser: number;
+  maxProposalsPerUser?: number | null;
 }
 
 export interface CreatePlayLogInput {
@@ -676,6 +677,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         location: input.location || null,
         votingMode: input.votingMode,
         maxVotesPerUser: input.maxVotesPerUser,
+        maxProposalsPerUser: input.maxProposalsPerUser ?? null,
       });
       const mapped = mapSessionDetail(session);
       upsertSession(mapped);

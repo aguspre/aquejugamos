@@ -4,6 +4,7 @@ import {
   ExternalLink,
   Layers,
   Loader2,
+  Lock,
   Plus,
   Sparkles,
   Star,
@@ -27,6 +28,7 @@ interface GameDetailDrawerProps {
   onClose: () => void;
   onPropose?: (game: Game) => void;
   isProposed?: boolean;
+  proposeDisabled?: boolean;
   proposeLabel?: string;
 }
 
@@ -47,6 +49,7 @@ export function GameDetailDrawer({
   onClose,
   onPropose,
   isProposed,
+  proposeDisabled,
   proposeLabel,
 }: GameDetailDrawerProps) {
   const [draftNotes, setDraftNotes] = useState(notes ?? '');
@@ -344,15 +347,19 @@ export function GameDetailDrawer({
             <button
               type="button"
               onClick={() => onPropose(game)}
-              disabled={isProposed}
+              disabled={isProposed || proposeDisabled}
               className={`flex-1 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-bold transition ${
                 isProposed
                   ? 'bg-forest-50 text-forest-700 border border-forest-200 cursor-default'
-                  : 'bg-forest-600 text-white hover:bg-forest-700 shadow-xs'
+                  : proposeDisabled
+                    ? 'bg-canvas-subtle text-ink-muted border border-border cursor-not-allowed'
+                    : 'bg-forest-600 text-white hover:bg-forest-700 shadow-xs'
               }`}
             >
               {isProposed ? (
                 <Check className="h-4 w-4" aria-hidden="true" />
+              ) : proposeDisabled ? (
+                <Lock className="h-4 w-4" aria-hidden="true" />
               ) : (
                 <Plus className="h-4 w-4" aria-hidden="true" />
               )}

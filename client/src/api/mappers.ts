@@ -113,6 +113,7 @@ export interface ApiSessionListItem {
   status: SessionStatus;
   votingMode: VotingMode;
   maxVotesPerUser: number;
+  maxProposalsPerUser?: number | null;
   inviteToken: string;
   host: ApiUserSummary;
   confirmedCount: number;
@@ -158,12 +159,15 @@ export interface ApiSessionDetail {
   status: SessionStatus;
   votingMode: VotingMode;
   maxVotesPerUser: number;
+  maxProposalsPerUser?: number | null;
   inviteToken: string;
   host: ApiUserSummary;
   canManageSession?: boolean;
   confirmedCount: number;
   userVotesUsed: number;
   votesRemaining: number;
+  userProposalsCount?: number;
+  proposalsRemaining?: number | null;
   lockedVotesCount?: number;
   lockedRanks?: number[];
   participants: {
@@ -389,6 +393,9 @@ export function mapSessionDetail(detail: ApiSessionDetail): GameSession {
     status: detail.status,
     votingMode: detail.votingMode,
     maxVotesPerUser: detail.maxVotesPerUser,
+    maxProposalsPerUser: detail.maxProposalsPerUser ?? null,
+    userProposalsCount: detail.userProposalsCount,
+    proposalsRemaining: detail.proposalsRemaining ?? null,
     lockedVotesCount: detail.lockedVotesCount,
     lockedRanks: detail.lockedRanks,
     inviteToken: detail.inviteToken,
@@ -628,6 +635,7 @@ export function mapSessionListItem(item: ApiSessionListItem): GameSession {
     status: item.status,
     votingMode: item.votingMode,
     maxVotesPerUser: item.maxVotesPerUser,
+    maxProposalsPerUser: item.maxProposalsPerUser ?? null,
     inviteToken: item.inviteToken,
     participants: item.participants.map((p) => ({
       rsvp: p.rsvp,

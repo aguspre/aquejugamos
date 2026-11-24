@@ -112,6 +112,7 @@ export function SessionRoomPage() {
   const [selectedGame, setSelectedGame] = useState<Game | null>(null);
   const [proposingGame, setProposingGame] = useState<Game | null>(null);
   const [proposalNote, setProposalNote] = useState("");
+  const [proposeError, setProposeError] = useState<string | null>(null);
   const [proposalToRemoveId, setProposalToRemoveId] = useState<string | null>(
     null,
   );
@@ -206,6 +207,18 @@ export function SessionRoomPage() {
       dialog.close();
     }
   }, [proposalToRemove]);
+
+  useEffect(() => {
+    if (!proposingGame || busyAction) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setProposingGame(null);
+        setProposeError(null);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [proposingGame, busyAction]);
 
   const poolMechanics = useMemo(
     () =>
@@ -337,6 +350,26 @@ export function SessionRoomPage() {
   const hasLockedSingleVote =
     session.votingMode === "single_choice" && lockedVotesCount > 0;
 
+  const maxProposalsPerUser = session.maxProposalsPerUser ?? null;
+  const hasProposalQuotaDetail = session.userProposalsCount !== undefined;
+  const userProposalsCount = hasProposalQuotaDetail
+    ? session.userProposalsCount!
+    : 0;
+  const proposalsRemaining =
+    maxProposalsPerUser !== null && hasProposalQuotaDetail
+      ? (session.proposalsRemaining ??
+        Math.max(0, maxProposalsPerUser - userProposalsCount))
+      : null;
+  const reachedProposalLimit = proposalsRemaining === 0;
+  const myOpenProposalsCount = hasProposalQuotaDetail
+    ? session.proposals.filter(
+        (p) => p.status !== "accepted" && p.proposedBy.id === currentUser.id,
+      ).length
+    : 0;
+  const proposalStatusByGameId = new Map(
+    session.proposals.map((p) => [p.game.id, p.status]),
+  );
+
   const runSessionAction = async (
     action: () => Promise<GameSession>,
     refreshPoolToo = false,
@@ -460,9 +493,55 @@ export function SessionRoomPage() {
   };
 
   const handleConfirmProposal = async (game: Game, note?: string) => {
-    await runSessionAction(() => proposeGame(session.id, game, note), true);
-    setProposingGame(null);
-    setProposalNote("");
+    setBusyAction(true);
+    setErrorMsg(null);
+    setProposeError(null);
+    setActionNotice(null);
+    try {
+      const updated = await proposeGame(session.id, game, note);
+      lastConfirmedSessionRef.current = updated;
+      setSession(updated);
+      setProposingGame(null);
+      setProposalNote("");
+      try {
+        const pool = await loadSessionPool(updated.id);
+        setSessionPool(pool);
+      } catch {
+        // Pool refresh failure does not revert a confirmed proposal
+      }
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : "No se pudo proponer el juego.";
+      const isTerminalProposalError =
+        err instanceof ApiError &&
+        (err.code === "MAX_PROPOSALS_REACHED" ||
+          err.code === "DUPLICATE_PROPOSAL" ||
+          err.code === "SESSION_VOTING_CLOSED");
+
+      if (isTerminalProposalError) {
+        setProposingGame(null);
+        setProposalNote("");
+        setProposeError(null);
+        setErrorMsg(message);
+        try {
+          const [fresh, freshPool] = await Promise.all([
+            loadSessionDetail(session.id),
+            loadSessionPool(session.id),
+          ]);
+          lastConfirmedSessionRef.current = fresh;
+          setSession(fresh);
+          setSessionPool(freshPool);
+        } catch {
+          // Keep error message even if background resync fails
+        }
+      } else {
+        setProposeError(message);
+      }
+    } finally {
+      setBusyAction(false);
+    }
   };
 
   const closeRemoveProposalModal = () => {
@@ -932,14 +1011,33 @@ export function SessionRoomPage() {
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setActiveTab("pool")}
-                className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-forest-200 bg-forest-50 px-3 text-xs font-bold text-forest-700 hover:bg-forest-100 transition"
-              >
-                <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                Proponer otro juego
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                {maxProposalsPerUser !== null && hasProposalQuotaDetail && (
+                  <span
+                    className={`inline-flex min-h-9 items-center rounded-xl border px-3 text-xs font-bold num-tabular ${
+                      reachedProposalLimit
+                        ? "border-ochre-500/40 bg-ochre-50 text-ochre-700"
+                        : "border-border bg-canvas-subtle text-ink-muted"
+                    }`}
+                  >
+                    Tus propuestas: {userProposalsCount}/{maxProposalsPerUser}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("pool")}
+                  className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-forest-200 bg-forest-50 px-3 text-xs font-bold text-forest-700 hover:bg-forest-100 transition"
+                >
+                  {reachedProposalLimit ? (
+                    <Library className="h-3.5 w-3.5" aria-hidden="true" />
+                  ) : (
+                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                  {reachedProposalLimit
+                    ? "Ver pool de juegos"
+                    : "Proponer otro juego"}
+                </button>
+              </div>
             </div>
           ) : null}
 
@@ -1162,7 +1260,7 @@ export function SessionRoomPage() {
               <p className="font-[var(--font-display)] text-lg font-bold text-ink">
                 Todos los juegos propuestos ya están confirmados
               </p>
-              {!isLocked && !isClosed && (
+              {!isLocked && !isClosed && !reachedProposalLimit && (
                 <>
                   <p className="text-xs sm:text-sm text-ink-muted max-w-md mx-auto">
                     Si quieren sumar otro juego (un filler o segunda partida),
@@ -1482,6 +1580,21 @@ export function SessionRoomPage() {
                     ? `Mostrando juegos compatibles con ${confirmedCount} jugadores (expansiones ocultas por defecto).`
                     : "Mostrando toda la colección combinada sin restringir por cantidad de asistentes."}
                 </p>
+                {maxProposalsPerUser !== null && hasProposalQuotaDetail && (
+                  <p
+                    className={`mt-1 text-xs font-semibold num-tabular ${
+                      reachedProposalLimit
+                        ? "text-terracotta-700"
+                        : "text-forest-700"
+                    }`}
+                  >
+                    {reachedProposalLimit
+                      ? myOpenProposalsCount > 0
+                        ? `Alcanzaste tu límite de ${maxProposalsPerUser} ${maxProposalsPerUser === 1 ? "propuesta" : "propuestas"} en esta juntada. Podés quitar alguna propuesta abierta para proponer otro juego.`
+                        : `Alcanzaste tu límite de ${maxProposalsPerUser} ${maxProposalsPerUser === 1 ? "propuesta" : "propuestas"} en esta juntada (tus propuestas ya están confirmadas).`
+                      : `Podés proponer ${proposalsRemaining} de ${maxProposalsPerUser} ${maxProposalsPerUser === 1 ? "juego" : "juegos"} en esta juntada.`}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -1544,7 +1657,15 @@ export function SessionRoomPage() {
             </div>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {filteredPool.map((item) => (
+              {filteredPool.map((item) => {
+                const liveProposalStatus = hasProposalQuotaDetail
+                  ? (proposalStatusByGameId.get(item.id) ?? null)
+                  : (item.proposalStatus ?? null);
+                const liveIsProposed = hasProposalQuotaDetail
+                  ? liveProposalStatus !== null
+                  : item.isProposed;
+
+                return (
                 <GameCard
                   key={item.id}
                   game={item}
@@ -1552,8 +1673,8 @@ export function SessionRoomPage() {
                   targetPlayers={confirmedCount}
                   onSelect={setSelectedGame}
                   actionSlot={
-                    item.proposalStatus === "accepted" ? (
-                      <div className="flex items-center justify-between gap-2 rounded-xl border border-forest-300 bg-forest-100/80 px-3 py-2 text-xs font-bold text-forest-800">
+                    liveProposalStatus === "accepted" ? (
+                      <div className="flex items-center justify-between gap-2 rounded-xl border border-forest-300 bg-forest-100/80 px-3 py-2 text-xs font-bold text-forest-700">
                         <span className="inline-flex items-center gap-1.5">
                           <CheckCircle2
                             className="h-3.5 w-3.5 text-forest-700"
@@ -1564,12 +1685,12 @@ export function SessionRoomPage() {
                         <button
                           type="button"
                           onClick={() => setActiveTab("proposals")}
-                          className="underline hover:text-forest-950"
+                          className="underline hover:text-forest-900"
                         >
                           Ver mesa
                         </button>
                       </div>
-                    ) : item.isProposed ? (
+                    ) : liveIsProposed ? (
                       <div className="flex items-center justify-between gap-2 rounded-xl border border-forest-200 bg-forest-50 px-3 py-2 text-xs font-bold text-forest-700">
                         <span className="inline-flex items-center gap-1.5">
                           <Check className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1586,20 +1707,38 @@ export function SessionRoomPage() {
                     ) : (
                       <button
                         type="button"
-                        disabled={isLocked || isClosed || busyAction}
+                        disabled={
+                          isLocked ||
+                          isClosed ||
+                          busyAction ||
+                          reachedProposalLimit
+                        }
+                        title={
+                          reachedProposalLimit && maxProposalsPerUser !== null
+                            ? `Alcanzaste el límite de ${maxProposalsPerUser} ${maxProposalsPerUser === 1 ? "propuesta" : "propuestas"} por integrante`
+                            : undefined
+                        }
                         onClick={() => {
+                          setProposeError(null);
                           setProposingGame(item);
                           setProposalNote("");
                         }}
-                        className="w-full inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl bg-forest-600 px-3 text-xs font-bold text-white shadow-xs hover:bg-forest-700 disabled:opacity-50 transition"
+                        className="w-full inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl bg-forest-600 px-3 text-xs font-bold text-white shadow-xs hover:bg-forest-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
                       >
-                        <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                        Proponer para votar
+                        {reachedProposalLimit ? (
+                          <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                        ) : (
+                          <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                        )}
+                        {reachedProposalLimit && maxProposalsPerUser !== null
+                          ? `Límite alcanzado (${userProposalsCount}/${maxProposalsPerUser})`
+                          : "Proponer para votar"}
                       </button>
                     )
                   }
                 />
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
@@ -1616,10 +1755,20 @@ export function SessionRoomPage() {
           <button
             type="button"
             aria-label="Cerrar"
-            onClick={() => setProposingGame(null)}
+            disabled={busyAction}
+            onClick={() => {
+              setProposingGame(null);
+              setProposeError(null);
+            }}
             className="fixed inset-0 bg-ink/40 backdrop-blur-[2px]"
           />
-          <div className="relative z-10 w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl border border-border bg-surface p-5 shadow-[var(--shadow-floating)] space-y-4">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void handleConfirmProposal(proposingGame, proposalNote);
+            }}
+            className="relative z-10 w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl border border-border bg-surface p-5 shadow-[var(--shadow-floating)] space-y-4"
+          >
             <div className="flex items-center gap-3">
               <img
                 src={proposingGame.thumbnailUrl}
@@ -1638,6 +1787,16 @@ export function SessionRoomPage() {
                 </h3>
               </div>
             </div>
+
+            {proposeError && (
+              <div
+                role="alert"
+                className="flex items-center gap-2 rounded-xl border border-terracotta-200 bg-terracotta-50 px-3 py-2 text-xs font-semibold text-terracotta-700"
+              >
+                <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>{proposeError}</span>
+              </div>
+            )}
 
             <div className="space-y-1.5">
               <label
@@ -1660,24 +1819,30 @@ export function SessionRoomPage() {
             <div className="flex items-center justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setProposingGame(null)}
-                className="min-h-10 rounded-xl border border-border px-4 text-xs font-semibold text-ink-muted hover:bg-canvas-subtle"
+                disabled={busyAction}
+                onClick={() => {
+                  setProposingGame(null);
+                  setProposeError(null);
+                }}
+                className="min-h-10 rounded-xl border border-border px-4 text-xs font-semibold text-ink-muted hover:bg-canvas-subtle disabled:opacity-60"
               >
                 Cancelar
               </button>
               <button
-                type="button"
+                type="submit"
                 disabled={busyAction}
-                onClick={() =>
-                  void handleConfirmProposal(proposingGame, proposalNote)
-                }
                 className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-forest-600 px-4 text-xs font-bold text-white hover:bg-forest-700 disabled:opacity-70"
               >
-                {busyAction && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {busyAction && (
+                  <Loader2
+                    className="h-3.5 w-3.5 animate-spin"
+                    aria-hidden="true"
+                  />
+                )}
                 Confirmar propuesta
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
 
@@ -1796,10 +1961,18 @@ export function SessionRoomPage() {
             ? session.proposals.some((p) => p.game.id === selectedGame.id)
             : false
         }
+        proposeDisabled={reachedProposalLimit}
+        proposeLabel={
+          reachedProposalLimit && maxProposalsPerUser !== null
+            ? `Límite alcanzado (${userProposalsCount}/${maxProposalsPerUser})`
+            : "Proponer para votar"
+        }
         onPropose={
           !isLocked && !isClosed
             ? (game) => {
+                if (reachedProposalLimit) return;
                 setSelectedGame(null);
+                setProposeError(null);
                 setProposingGame(game);
               }
             : undefined
