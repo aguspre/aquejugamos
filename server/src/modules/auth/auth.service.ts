@@ -6,6 +6,7 @@ import { getEnv } from '../../config/env.js';
 import { prisma } from '../../config/prisma.js';
 import { badRequest, conflict, notFound, unauthorized } from '../../utils/errors.js';
 import { hashPassword, verifyPassword } from '../../utils/password.js';
+import { ensureActiveSeriesSession } from '../sessions/sessions.service.js';
 import type {
   GuestJoinInput,
   InvitePreviewQuery,
@@ -369,6 +370,77 @@ export async function getInvitePreview(query: InvitePreviewQuery) {
     };
   }
 
+  if (query.seriesToken) {
+    const series = await prisma.sessionSeries.findUnique({
+      where: { shareToken: query.seriesToken },
+      select: { id: true, frequency: true, shareToken: true, isActive: true },
+    });
+
+    if (!series) {
+      throw notFound(
+        'El link de la juntada recurrente no es válido o expiró.',
+        'SERIES_NOT_FOUND',
+      );
+    }
+
+    const ensured = await ensureActiveSeriesSession(series.id);
+    if (!ensured?.activeSessionId) {
+      throw notFound(
+        'Esta juntada recurrente no tiene fechas disponibles.',
+        'SESSION_NOT_FOUND',
+      );
+    }
+
+    const activeSession = await prisma.session.findUnique({
+      where: { id: ensured.activeSessionId },
+      select: {
+        id: true,
+        title: true,
+        scheduledAt: true,
+        location: true,
+        status: true,
+        host: { select: { displayName: true } },
+        group: { select: { name: true } },
+        participants: {
+          where: { rsvp: RsvpStatus.going },
+          select: { userId: true },
+        },
+        _count: { select: { proposals: true } },
+      },
+    });
+
+    if (!activeSession) {
+      throw notFound('Juntada no encontrada.', 'SESSION_NOT_FOUND');
+    }
+
+    if (
+      activeSession.status === SessionStatus.cancelled ||
+      (!series.isActive && activeSession.status === SessionStatus.completed)
+    ) {
+      throw badRequest(
+        'Esta juntada recurrente está pausada o cancelada.',
+        undefined,
+        'SERIES_PAUSED',
+      );
+    }
+
+    return {
+      kind: 'session' as const,
+      sessionId: activeSession.id,
+      sessionTitle: activeSession.title,
+      groupName: activeSession.group?.name ?? 'Grupo',
+      scheduledAt: activeSession.scheduledAt,
+      location: activeSession.location,
+      status: activeSession.status,
+      hostName: activeSession.host.displayName,
+      confirmedCount: activeSession.participants.length,
+      proposalsCount: activeSession._count.proposals,
+      isRecurring: true,
+      recurrenceFrequency: series.frequency,
+      seriesShareToken: series.shareToken,
+    };
+  }
+
   const session = await prisma.session.findUnique({
     where: { inviteToken: query.sessionToken! },
     select: {
@@ -485,6 +557,92 @@ export async function createGuestForInvite(input: GuestJoinInput) {
         groupId: group.id,
         groupName: group.name,
         targetSessionId: targetSession?.id ?? null,
+      },
+    };
+  }
+
+  if (input.seriesShareToken) {
+    const series = await prisma.sessionSeries.findUnique({
+      where: { shareToken: input.seriesShareToken },
+      select: { id: true, isActive: true },
+    });
+
+    if (!series) {
+      throw notFound(
+        'El link de la juntada recurrente no es válido o expiró.',
+        'SERIES_NOT_FOUND',
+      );
+    }
+
+    if (!series.isActive) {
+      throw badRequest(
+        'Esta juntada recurrente está pausada.',
+        undefined,
+        'SERIES_PAUSED',
+      );
+    }
+
+    const ensured = await ensureActiveSeriesSession(series.id);
+    if (!ensured?.activeSessionId) {
+      throw notFound(
+        'Esta juntada recurrente no tiene fechas disponibles.',
+        'SESSION_NOT_FOUND',
+      );
+    }
+
+    const activeSession = await prisma.session.findUnique({
+      where: { id: ensured.activeSessionId },
+      select: {
+        id: true,
+        status: true,
+        group: { select: { name: true } },
+      },
+    });
+
+    if (!activeSession) {
+      throw notFound('Juntada no encontrada.', 'SESSION_NOT_FOUND');
+    }
+
+    if (
+      activeSession.status === SessionStatus.cancelled ||
+      activeSession.status === SessionStatus.completed
+    ) {
+      throw badRequest(
+        'Esta juntada recurrente está pausada o finalizada.',
+        undefined,
+        'SERIES_PAUSED',
+      );
+    }
+
+    const user = await prisma.user.create({
+      data: {
+        email: syntheticEmail,
+        displayName: input.displayName,
+      },
+    });
+
+    await prisma.sessionParticipant.upsert({
+      where: {
+        sessionId_userId: { sessionId: activeSession.id, userId: user.id },
+      },
+      update: {
+        rsvp: RsvpStatus.going,
+        respondedAt: new Date(),
+      },
+      create: {
+        sessionId: activeSession.id,
+        userId: user.id,
+        rsvp: RsvpStatus.going,
+      },
+    });
+
+    return {
+      user: toPublicUser(user),
+      guestScope: {
+        kind: 'session' as const,
+        sessionId: activeSession.id,
+        groupName: activeSession.group?.name ?? 'Grupo',
+        targetSessionId: activeSession.id,
       },
     };
   }

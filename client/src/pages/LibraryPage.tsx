@@ -28,6 +28,7 @@ import { GuestLockedView } from "../components/auth/GuestLockedView";
 import { GameCard } from "../components/game/GameCard";
 import { GameDetailDrawer } from "../components/game/GameDetailDrawer";
 import { FilterChipBar } from "../components/ui/FilterChipBar";
+import { PageLoadingSkeleton } from "../components/ui/PageLoadingSkeleton";
 import { useAppState } from "../context/AppStateContext";
 import { useAuth } from "../context/AuthContext";
 import type { Game, GameFilterState, UserGameStatus } from "../types/domain";
@@ -72,7 +73,7 @@ function BggSearchThumbnail({
 }
 
 export function LibraryPage() {
-  const { isAuthenticated, loading: authLoading } = useAuth();
+  const { isAuthenticated, backendUser, loading: authLoading } = useAuth();
   const {
     currentUser,
     isBootstrapping,
@@ -130,7 +131,7 @@ export function LibraryPage() {
   }, [currentUser.bggUsername]);
 
   useEffect(() => {
-    if (!isAuthenticated) {
+    if (!isAuthenticated || !backendUser) {
       setBggQuota(null);
       return;
     }
@@ -146,7 +147,7 @@ export function LibraryPage() {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, lastBggSyncLabel]);
+  }, [isAuthenticated, backendUser, lastBggSyncLabel]);
 
   useEffect(() => {
     if (!addModalOpen) return;
@@ -394,7 +395,9 @@ export function LibraryPage() {
                 title="Para cuidar la API de BoardGameGeek, podés actualizar tu biblioteca hasta 2 veces por día."
               >
                 {bggQuota.remainingToday}/{bggQuota.dailyLimit}{" "}
-                {bggQuota.remainingToday === 1 ? "actualización hoy" : "actualizaciones hoy"}
+                {bggQuota.remainingToday === 1
+                  ? "actualización hoy"
+                  : "actualizaciones hoy"}
               </span>
             )}
           </div>
@@ -581,13 +584,7 @@ export function LibraryPage() {
 
       {/* Loading / Empty Library State */}
       {isBootstrapping ? (
-        <div className="flex items-center justify-center py-16 text-ink-muted gap-2">
-          <Loader2
-            className="h-5 w-5 animate-spin text-forest-600"
-            aria-hidden="true"
-          />
-          <span className="text-sm font-semibold">Cargando tu colección…</span>
-        </div>
+        <PageLoadingSkeleton variant="library" />
       ) : library.length === 0 ? (
         <div className="rounded-3xl border border-dashed border-border-strong bg-surface/80 px-6 py-14 text-center space-y-4">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-forest-50 text-forest-700">
@@ -821,9 +818,9 @@ export function LibraryPage() {
             </div>
 
             <p className="text-sm text-ink-muted">
-              El juego se quitará de tu colección personal y dejará de aparecer en
-              el pool de tus próximas juntadas. Si lo necesitás, podés volver a
-              importarlo desde BoardGameGeek.
+              El juego se quitará de tu colección personal y dejará de aparecer
+              en el pool de tus próximas juntadas. Si lo necesitás, podés volver
+              a importarlo desde BoardGameGeek.
             </p>
 
             <div className="flex items-center justify-end gap-2 pt-1">
@@ -842,7 +839,10 @@ export function LibraryPage() {
                 className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-terracotta-600 px-4 text-xs font-bold text-white hover:bg-terracotta-700 disabled:opacity-70 transition"
               >
                 {removingGame ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                  <Loader2
+                    className="h-3.5 w-3.5 animate-spin"
+                    aria-hidden="true"
+                  />
                 ) : (
                   <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                 )}

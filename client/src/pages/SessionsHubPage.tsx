@@ -5,12 +5,12 @@ import {
   CheckCircle2,
   Crown,
   Link2,
-  Loader2,
   Lock,
   LogIn,
   MapPin,
   Pencil,
   Plus,
+  Repeat,
   Trash2,
   UserPlus,
   Vote,
@@ -22,10 +22,12 @@ import { CancelOrDeleteSessionDialog } from "../components/sessions/CancelOrDele
 import { CreateSessionModal } from "../components/sessions/CreateSessionModal";
 import { EditSessionModal } from "../components/sessions/EditSessionModal";
 import { OwnerAvatarStack } from "../components/ui/OwnerAvatarStack";
+import { PageLoadingSkeleton } from "../components/ui/PageLoadingSkeleton";
 import { useAppState } from "../context/AppStateContext";
 import { useAuth } from "../context/AuthContext";
 import type { GameSession, SessionStatus, VotingMode } from "../types/domain";
 import { formatSessionDate } from "../utils/formatDate";
+import { getSessionShareUrl, RECURRENCE_LABEL } from "../utils/recurrence";
 
 const STATUS_META: Record<SessionStatus, { label: string; className: string }> =
   {
@@ -71,7 +73,9 @@ export function SessionsHubPage() {
     deleteSession,
   } = useAppState();
   const [createOpen, setCreateOpen] = useState(false);
-  const [editingSession, setEditingSession] = useState<GameSession | null>(null);
+  const [editingSession, setEditingSession] = useState<GameSession | null>(
+    null,
+  );
   const [managingDeleteSession, setManagingDeleteSession] =
     useState<GameSession | null>(null);
   const [hubNotice, setHubNotice] = useState<string | null>(null);
@@ -117,7 +121,7 @@ export function SessionsHubPage() {
   );
 
   const handleCopyInvite = (session: GameSession) => {
-    const url = `${window.location.origin}/sessions/${session.id}?invite=${session.inviteToken}`;
+    const url = getSessionShareUrl(session);
     void navigator.clipboard?.writeText(url);
     setCopiedId(session.id);
     setTimeout(() => setCopiedId(null), 2000);
@@ -231,7 +235,10 @@ export function SessionsHubPage() {
           className="flex items-center justify-between gap-2 rounded-2xl border border-forest-200 bg-forest-50 px-4 py-3 text-xs font-semibold text-forest-700"
         >
           <span className="inline-flex items-center gap-2">
-            <Check className="h-4 w-4 shrink-0 text-forest-600" aria-hidden="true" />
+            <Check
+              className="h-4 w-4 shrink-0 text-forest-600"
+              aria-hidden="true"
+            />
             <span>{hubNotice}</span>
           </span>
           <button
@@ -246,13 +253,7 @@ export function SessionsHubPage() {
       )}
 
       {isBootstrapping ? (
-        <div className="flex items-center justify-center py-16 text-ink-muted gap-2">
-          <Loader2
-            className="h-5 w-5 animate-spin text-forest-600"
-            aria-hidden="true"
-          />
-          <span className="text-sm font-semibold">Cargando juntadas…</span>
-        </div>
+        <PageLoadingSkeleton variant="sessions" />
       ) : upcoming.length === 0 ? (
         <div className="rounded-3xl border border-dashed border-border-strong bg-surface/80 px-6 py-14 text-center space-y-4">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-forest-50 text-forest-700">
@@ -338,8 +339,8 @@ export function SessionsHubPage() {
               const statusMeta = STATUS_META[session.status];
               const canManage = Boolean(
                 isAuthenticated &&
-                  (session.canManageSession ??
-                    session.host.id === currentUser.id),
+                (session.canManageSession ??
+                  session.host.id === currentUser.id),
               );
 
               return (
@@ -371,6 +372,19 @@ export function SessionsHubPage() {
                             ? "Sin grupo"
                             : session.groupName}
                         </span>
+                        {session.series && (
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                              session.series.isActive
+                                ? "border-teal-100 bg-teal-50 text-teal-700"
+                                : "border-border bg-canvas-subtle text-ink-muted"
+                            }`}
+                          >
+                            <Repeat className="h-3 w-3" aria-hidden="true" />
+                            {RECURRENCE_LABEL[session.series.frequency]}
+                            {!session.series.isActive ? " · Pausada" : ""}
+                          </span>
+                        )}
                       </div>
 
                       <span className="text-[11px] font-semibold text-ink-subtle num-tabular">
@@ -513,7 +527,10 @@ export function SessionsHubPage() {
                             title="Editar juntada"
                             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-canvas text-ink-muted hover:border-border-strong hover:text-ink transition"
                           >
-                            <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                            <Pencil
+                              className="h-3.5 w-3.5"
+                              aria-hidden="true"
+                            />
                           </button>
                           <button
                             type="button"
@@ -522,7 +539,10 @@ export function SessionsHubPage() {
                             title="Cancelar o eliminar juntada"
                             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-canvas text-ink-muted hover:border-terracotta-200 hover:bg-terracotta-50 hover:text-terracotta-700 transition"
                           >
-                            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                            <Trash2
+                              className="h-3.5 w-3.5"
+                              aria-hidden="true"
+                            />
                           </button>
                         </>
                       )}
@@ -532,7 +552,11 @@ export function SessionsHubPage() {
                           type="button"
                           onClick={() => handleCopyInvite(session)}
                           className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-border bg-canvas px-2.5 text-xs font-semibold text-ink-muted hover:border-border-strong hover:text-ink transition"
-                          title="Copiar link de invitación"
+                          title={
+                            session.series
+                              ? "Copiar link fijo de la serie recurrente"
+                              : "Copiar link de invitación"
+                          }
                         >
                           {copiedId === session.id ? (
                             <>
@@ -548,7 +572,9 @@ export function SessionsHubPage() {
                                 className="h-3.5 w-3.5"
                                 aria-hidden="true"
                               />
-                              <span>Invitar</span>
+                              <span>
+                                {session.series ? "Link fijo" : "Invitar"}
+                              </span>
                             </>
                           )}
                         </button>
@@ -586,8 +612,8 @@ export function SessionsHubPage() {
               const statusMeta = STATUS_META[session.status];
               const canManage = Boolean(
                 isAuthenticated &&
-                  (session.canManageSession ??
-                    session.host.id === currentUser.id),
+                (session.canManageSession ??
+                  session.host.id === currentUser.id),
               );
               return (
                 <div
@@ -604,6 +630,12 @@ export function SessionsHubPage() {
                       >
                         {statusMeta.label}
                       </span>
+                      {session.series && (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-teal-100 bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-700">
+                          <Repeat className="h-2.5 w-2.5" aria-hidden="true" />
+                          {RECURRENCE_LABEL[session.series.frequency]}
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-ink-subtle num-tabular">
                       {formatSessionDate(session.scheduledAt)} ·{" "}

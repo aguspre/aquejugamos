@@ -5,6 +5,7 @@ import {
   ListOrdered,
   Loader2,
   MapPin,
+  Repeat,
   Sparkles,
   Users,
   Vote,
@@ -16,7 +17,7 @@ import {
   useAppState,
   type CreateSessionInput,
 } from '../../context/AppStateContext';
-import type { VotingMode } from '../../types/domain';
+import type { RecurrenceFrequency, VotingMode } from '../../types/domain';
 
 interface CreateSessionModalProps {
   open: boolean;
@@ -72,6 +73,8 @@ export function CreateSessionModal({
   const [votingMode, setVotingMode] = useState<VotingMode>('multi_vote');
   const [maxVotesPerUser, setMaxVotesPerUser] = useState(3);
   const [maxProposalsPerUser, setMaxProposalsPerUser] = useState<number | null>(null);
+  const [recurrenceFrequency, setRecurrenceFrequency] =
+    useState<RecurrenceFrequency | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -79,6 +82,7 @@ export function CreateSessionModal({
     if (open) {
       setSelectedGroupId(activeGroup?.id ?? '__direct__');
       setMaxProposalsPerUser(null);
+      setRecurrenceFrequency(null);
       setError(null);
     }
   }, [open, activeGroup?.id]);
@@ -115,11 +119,13 @@ export function CreateSessionModal({
         votingMode,
         maxVotesPerUser,
         maxProposalsPerUser,
+        recurrenceFrequency: chosenGroup ? recurrenceFrequency : null,
       });
 
       setTitle('');
       setLocation('');
       setMaxProposalsPerUser(null);
+      setRecurrenceFrequency(null);
       onClose();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'No se pudo crear la juntada');
@@ -273,7 +279,10 @@ export function CreateSessionModal({
 
               <button
                 type="button"
-                onClick={() => setSelectedGroupId('__direct__')}
+                onClick={() => {
+                  setSelectedGroupId('__direct__');
+                  setRecurrenceFrequency(null);
+                }}
                 className={`rounded-xl border p-3 text-left transition ${
                   selectedGroupId === '__direct__'
                     ? 'border-forest-600 bg-forest-50/80 ring-1 ring-forest-600'
@@ -287,6 +296,62 @@ export function CreateSessionModal({
                   Compartir token por WhatsApp
                 </span>
               </button>
+            </div>
+          </div>
+
+          {/* Recurrence (group sessions only) */}
+          <div className="space-y-2 rounded-xl border border-border bg-canvas/70 px-3.5 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <span className="flex items-center gap-1.5 text-xs font-semibold text-ink">
+                  <Repeat className="h-3.5 w-3.5 text-forest-600" aria-hidden="true" />
+                  Juntada recurrente
+                </span>
+                <span className="block text-[11px] text-ink-muted">
+                  {selectedGroupId === '__direct__'
+                    ? 'Elegí un grupo arriba para habilitar un link fijo recurrente.'
+                    : 'Mismo link fijo siempre: muestra la próxima fecha activa y guarda las anteriores en el historial.'}
+                </span>
+              </div>
+              <div
+                className="flex flex-wrap items-center gap-1.5"
+                role="group"
+                aria-label="Frecuencia de repetición"
+              >
+                {(
+                  [
+                    { id: null, label: 'Una sola vez' },
+                    { id: 'weekly', label: 'Semanal' },
+                    { id: 'biweekly', label: 'Quincenal' },
+                    { id: 'monthly', label: 'Mensual' },
+                  ] as const
+                ).map((option) => {
+                  const active = recurrenceFrequency === option.id;
+                  const disabled =
+                    selectedGroupId === '__direct__' && option.id !== null;
+                  return (
+                    <button
+                      key={option.id ?? 'once'}
+                      type="button"
+                      disabled={disabled}
+                      aria-pressed={active}
+                      aria-label={
+                        option.id === null
+                          ? 'Juntada única sin repetición'
+                          : `Repetir de forma ${option.label.toLowerCase()}`
+                      }
+                      onClick={() => setRecurrenceFrequency(option.id)}
+                      className={`min-h-9 rounded-lg px-2.5 text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-forest-600 focus-visible:ring-offset-1 disabled:opacity-45 disabled:cursor-not-allowed ${
+                        active
+                          ? 'bg-forest-600 text-white'
+                          : 'bg-surface border border-border text-ink-muted hover:border-border-strong'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 

@@ -29,6 +29,33 @@
       "destination": "/api/og-preview?kind=session&sessionId=:sessionId&invite=:invite"
     },
     {
+      "source": "/s/:seriesToken",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": "(?i).*(whatsapp|facebookexternalhit|facebot|meta-externalagent|twitterbot|telegrambot|discordbot|slackbot|linkedinbot|skypeuripreview|applebot|embedly|viber|vkshare|pinterest|googlebot|bingbot|opengraph|linkpreview).*"
+        }
+      ],
+      "destination": "/api/og-preview?kind=series&seriesToken=:seriesToken"
+    },
+    {
+      "source": "/welcome",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": "(?i).*(whatsapp|facebookexternalhit|facebot|meta-externalagent|twitterbot|telegrambot|discordbot|slackbot|linkedinbot|skypeuripreview|applebot|embedly|viber|vkshare|pinterest|googlebot|bingbot|opengraph|linkpreview).*"
+        },
+        {
+          "type": "query",
+          "key": "seriesInvite",
+          "value": "(?<seriesInvite>.+)"
+        }
+      ],
+      "destination": "/api/og-preview?kind=series&seriesToken=:seriesInvite"
+    },
+    {
       "source": "/join/:inviteCode",
       "has": [
         {

@@ -74,8 +74,9 @@ export const invitePreviewQuerySchema = z
   .object({
     groupCode: z.string().trim().min(2).max(40).optional(),
     sessionToken: z.string().trim().min(4).max(80).optional(),
+    seriesToken: z.string().trim().min(4).max(80).optional(),
   })
-  .refine((v) => Boolean(v.groupCode || v.sessionToken), {
+  .refine((v) => Boolean(v.groupCode || v.sessionToken || v.seriesToken), {
     message: 'Indicá un código de grupo o token de juntada',
   });
 
@@ -88,8 +89,9 @@ export const guestJoinSchema = z
       .max(60, 'El nombre es demasiado largo'),
     groupInviteCode: z.string().trim().min(2).max(40).optional(),
     sessionInviteToken: z.string().trim().min(4).max(80).optional(),
+    seriesShareToken: z.string().trim().min(4).max(80).optional(),
   })
-  .refine((v) => Boolean(v.groupInviteCode || v.sessionInviteToken), {
+  .refine((v) => Boolean(v.groupInviteCode || v.sessionInviteToken || v.seriesShareToken), {
     message: 'Se requiere un enlace de invitación válido para entrar como invitado',
   });
 

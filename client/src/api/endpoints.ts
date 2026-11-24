@@ -1,6 +1,7 @@
 import type {
   GroupRole,
   ProposalStatus,
+  RecurrenceFrequency,
   RsvpStatus,
   SessionStatus,
   UserGameStatus,
@@ -15,6 +16,7 @@ import type {
   ApiPoolGame,
   ApiSessionDetail,
   ApiSessionListItem,
+  ApiSessionSeriesSummary,
   ApiSessionVotesSnapshot,
   ApiUserSummary,
 } from './mappers';
@@ -51,6 +53,9 @@ export interface InvitePreviewSession {
   hostName?: string;
   confirmedCount?: number;
   proposalsCount?: number;
+  isRecurring?: boolean;
+  recurrenceFrequency?: RecurrenceFrequency;
+  seriesShareToken?: string;
 }
 
 export type InvitePreview = InvitePreviewGroup | InvitePreviewSession;
@@ -97,7 +102,11 @@ export interface BggSearchResult {
 }
 
 export const authApi = {
-  invitePreview: (query: { groupCode?: string; sessionToken?: string }) =>
+  invitePreview: (query: {
+    groupCode?: string;
+    sessionToken?: string;
+    seriesToken?: string;
+  }) =>
     apiRequest<{ preview: InvitePreview }>('/api/auth/invite-preview', {
       query,
     }),
@@ -106,6 +115,7 @@ export const authApi = {
     displayName: string;
     groupInviteCode?: string;
     sessionInviteToken?: string;
+    seriesShareToken?: string;
   }) =>
     apiRequest<{
       token: string;
@@ -173,6 +183,7 @@ export const bggApi = {
     apiRequest<BggSyncResponse>('/api/bgg/sync', {
       method: 'POST',
       body: payload,
+      timeoutMs: 60_000,
     }),
 
   search: (query: string, exact = false) =>
@@ -267,6 +278,7 @@ export const sessionsApi = {
     votingMode: VotingMode;
     maxVotesPerUser: number;
     maxProposalsPerUser?: number | null;
+    recurrenceFrequency?: RecurrenceFrequency | null;
   }) =>
     apiRequest<{ session: ApiSessionDetail }>('/api/sessions', {
       method: 'POST',
@@ -296,6 +308,32 @@ export const sessionsApi = {
     apiRequest<{ session: ApiSessionDetail }>('/api/sessions/join', {
       method: 'POST',
       body: { inviteToken, rsvp },
+    }),
+
+  joinSeries: (shareToken: string, rsvp: RsvpStatus = 'going') =>
+    apiRequest<{ session: ApiSessionDetail }>('/api/sessions/series/join', {
+      method: 'POST',
+      body: { shareToken, rsvp },
+    }),
+
+  advanceSeries: (seriesId: string) =>
+    apiRequest<{ session: ApiSessionDetail }>(
+      `/api/sessions/series/${seriesId}/advance`,
+      {
+        method: 'POST',
+      },
+    ),
+
+  updateSeries: (
+    seriesId: string,
+    payload: { frequency?: RecurrenceFrequency; isActive?: boolean },
+  ) =>
+    apiRequest<{
+      series: ApiSessionSeriesSummary;
+      activeSessionId: string | null;
+    }>(`/api/sessions/series/${seriesId}`, {
+      method: 'PATCH',
+      body: payload,
     }),
 
   updateRsvp: (sessionId: string, rsvp: RsvpStatus) =>

@@ -7,20 +7,33 @@ import {
   Plus,
   Settings2,
   Users,
-} from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useAppState } from '../../context/AppStateContext';
-import { useAuth } from '../../context/AuthContext';
-import { OwnerAvatarStack } from '../ui/OwnerAvatarStack';
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAppState } from "../../context/AppStateContext";
+import { useAuth } from "../../context/AuthContext";
+import { OwnerAvatarStack } from "../ui/OwnerAvatarStack";
 
 interface GroupSwitcherProps {
-  variant: 'sidebar' | 'mobile-header';
+  variant: "sidebar" | "mobile-header";
 }
 
 export function GroupSwitcher({ variant }: GroupSwitcherProps) {
-  const { groups, activeGroup, setActiveGroupId } = useAppState();
-  const { isAuthenticated, isGuestSession, guestScope, openAuthModal } = useAuth();
+  const { groups, activeGroup, isBootstrapping, setActiveGroupId } =
+    useAppState();
+  const {
+    isAuthenticated,
+    isGuestSession,
+    guestScope,
+    backendSyncStatus,
+    openAuthModal,
+  } = useAuth();
+  const isLoadingGroups =
+    isAuthenticated &&
+    !activeGroup &&
+    (isBootstrapping ||
+      backendSyncStatus === "idle" ||
+      backendSyncStatus === "syncing");
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
@@ -36,13 +49,13 @@ export function GroupSwitcher({ variant }: GroupSwitcherProps) {
       }
     };
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
+      if (event.key === "Escape") setOpen(false);
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('keydown', handleEscape);
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleEscape);
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
     };
   }, [open]);
 
@@ -59,11 +72,11 @@ export function GroupSwitcher({ variant }: GroupSwitcherProps) {
   const guestLabel =
     isGuestSession && guestScope?.groupName
       ? guestScope.groupName
-      : 'Modo invitado';
+      : "Modo invitado";
 
   return (
     <div className="relative" ref={containerRef}>
-      {variant === 'sidebar' ? (
+      {variant === "sidebar" ? (
         <button
           type="button"
           onClick={() => setOpen((prev) => !prev)}
@@ -74,15 +87,15 @@ export function GroupSwitcher({ variant }: GroupSwitcherProps) {
           <div className="flex items-center justify-between gap-2 mb-1.5">
             <span className="text-[10px] font-bold uppercase tracking-wider text-ink-subtle">
               {isAuthenticated
-                ? 'Grupo activo'
+                ? "Grupo activo"
                 : isGuestSession
-                  ? 'Invitación activa'
-                  : 'Grupos'}
+                  ? "Invitación activa"
+                  : "Grupos"}
             </span>
             {isAuthenticated && activeGroup ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-forest-50 px-2 py-0.5 text-[10px] font-bold text-forest-700 num-tabular">
-                {activeGroup.members.length}{' '}
-                {activeGroup.members.length === 1 ? 'miembro' : 'amigos'}
+                {activeGroup.members.length}{" "}
+                {activeGroup.members.length === 1 ? "miembro" : "amigos"}
               </span>
             ) : !isAuthenticated ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-canvas-deep px-2 py-0.5 text-[10px] font-bold text-ink-muted">
@@ -97,12 +110,14 @@ export function GroupSwitcher({ variant }: GroupSwitcherProps) {
               {isAuthenticated
                 ? activeGroup
                   ? activeGroup.name
-                  : 'Creá o unite a un grupo'
+                  : isLoadingGroups
+                    ? "Cargando grupos…"
+                    : "Creá o unite a un grupo"
                 : guestLabel}
             </p>
             <ChevronDown
               className={`h-4 w-4 shrink-0 text-ink-muted transition-transform ${
-                open ? 'rotate-180' : ''
+                open ? "rotate-180" : ""
               }`}
               aria-hidden="true"
             />
@@ -128,20 +143,28 @@ export function GroupSwitcher({ variant }: GroupSwitcherProps) {
           className="inline-flex min-h-8 max-w-[190px] items-center gap-1.5 rounded-full border border-border bg-surface/90 px-2.5 py-1 text-xs font-bold text-ink shadow-2xs transition hover:border-border-strong"
         >
           {isAuthenticated ? (
-            <Users className="h-3.5 w-3.5 shrink-0 text-forest-600" aria-hidden="true" />
+            <Users
+              className="h-3.5 w-3.5 shrink-0 text-forest-600"
+              aria-hidden="true"
+            />
           ) : (
-            <Lock className="h-3.5 w-3.5 shrink-0 text-ink-subtle" aria-hidden="true" />
+            <Lock
+              className="h-3.5 w-3.5 shrink-0 text-ink-subtle"
+              aria-hidden="true"
+            />
           )}
           <span className="truncate">
             {isAuthenticated
               ? activeGroup
                 ? activeGroup.name
-                : 'Mis grupos'
+                : isLoadingGroups
+                  ? "Cargando…"
+                  : "Mis grupos"
               : guestLabel}
           </span>
           <ChevronDown
             className={`h-3.5 w-3.5 shrink-0 text-ink-subtle transition-transform ${
-              open ? 'rotate-180' : ''
+              open ? "rotate-180" : ""
             }`}
             aria-hidden="true"
           />
@@ -152,9 +175,9 @@ export function GroupSwitcher({ variant }: GroupSwitcherProps) {
         <div
           role="menu"
           className={`absolute z-50 mt-2 rounded-2xl border border-border bg-surface p-2 shadow-[var(--shadow-floating)] ${
-            variant === 'sidebar'
-              ? 'left-0 right-0'
-              : 'left-0 w-72 max-w-[calc(100vw-2rem)]'
+            variant === "sidebar"
+              ? "left-0 right-0"
+              : "left-0 w-72 max-w-[calc(100vw-2rem)]"
           }`}
         >
           {!isAuthenticated ? (
@@ -171,7 +194,7 @@ export function GroupSwitcher({ variant }: GroupSwitcherProps) {
                   <p className="text-[11px] text-ink-muted leading-snug">
                     {isGuestSession && guestScope?.groupName
                       ? `Tenés acceso como invitado solo a las juntadas de ${guestScope.groupName}.`
-                      : 'Iniciá sesión para ver tus grupos o crear uno nuevo.'}
+                      : "Iniciá sesión para ver tus grupos o crear uno nuevo."}
                   </p>
                 </div>
               </div>
@@ -180,7 +203,7 @@ export function GroupSwitcher({ variant }: GroupSwitcherProps) {
                 role="menuitem"
                 onClick={() => {
                   setOpen(false);
-                  openAuthModal('signin');
+                  openAuthModal("signin");
                 }}
                 className="w-full inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl bg-forest-600 px-3 text-xs font-bold text-white hover:bg-forest-700 transition"
               >
@@ -211,16 +234,20 @@ export function GroupSwitcher({ variant }: GroupSwitcherProps) {
                         onClick={() => handleSelectGroup(group.id)}
                         className={`flex w-full items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-left transition ${
                           isSelected
-                            ? 'bg-forest-50 text-forest-900'
-                            : 'text-ink hover:bg-canvas-subtle'
+                            ? "bg-forest-50 text-forest-900"
+                            : "text-ink hover:bg-canvas-subtle"
                         }`}
                       >
                         <div className="min-w-0">
-                          <p className="text-xs font-bold truncate">{group.name}</p>
+                          <p className="text-xs font-bold truncate">
+                            {group.name}
+                          </p>
                           <p className="text-[11px] text-ink-subtle num-tabular">
-                            {group.members.length}{' '}
-                            {group.members.length === 1 ? 'miembro' : 'miembros'} ·{' '}
-                            {group.inviteCode}
+                            {group.members.length}{" "}
+                            {group.members.length === 1
+                              ? "miembro"
+                              : "miembros"}{" "}
+                            · {group.inviteCode}
                           </p>
                         </div>
                         {isSelected && (
@@ -241,7 +268,7 @@ export function GroupSwitcher({ variant }: GroupSwitcherProps) {
                 <button
                   type="button"
                   role="menuitem"
-                  onClick={() => handleNavigateAction('/groups?action=create')}
+                  onClick={() => handleNavigateAction("/groups?action=create")}
                   className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-xs font-bold text-forest-700 hover:bg-forest-50 transition"
                 >
                   <Plus className="h-3.5 w-3.5" aria-hidden="true" />
@@ -250,16 +277,19 @@ export function GroupSwitcher({ variant }: GroupSwitcherProps) {
                 <button
                   type="button"
                   role="menuitem"
-                  onClick={() => handleNavigateAction('/groups?action=join')}
+                  onClick={() => handleNavigateAction("/groups?action=join")}
                   className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-xs font-semibold text-ink hover:bg-canvas-subtle transition"
                 >
-                  <KeyRound className="h-3.5 w-3.5 text-ink-muted" aria-hidden="true" />
+                  <KeyRound
+                    className="h-3.5 w-3.5 text-ink-muted"
+                    aria-hidden="true"
+                  />
                   Unirme con código
                 </button>
                 <button
                   type="button"
                   role="menuitem"
-                  onClick={() => handleNavigateAction('/groups')}
+                  onClick={() => handleNavigateAction("/groups")}
                   className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-xs font-semibold text-ink-muted hover:bg-canvas-subtle hover:text-ink transition"
                 >
                   <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />

@@ -8,6 +8,7 @@ import {
   Library,
   Loader2,
   LogOut,
+  Repeat,
   Ticket,
   User as UserIcon,
   Users,
@@ -26,6 +27,7 @@ import { AuthForm, type AuthFormMode } from "../components/auth/AuthForm";
 import { useAppState } from "../context/AppStateContext";
 import { useAuth } from "../context/AuthContext";
 import { formatSessionDate } from "../utils/formatDate";
+import { RECURRENCE_LABEL } from "../utils/recurrence";
 
 const PROJECT_PILLARS = [
   {
@@ -67,7 +69,10 @@ export function WelcomePage() {
 
   const groupInviteCode = searchParams.get("groupInvite")?.trim() || "";
   const sessionInviteToken = searchParams.get("sessionInvite")?.trim() || "";
-  const hasInvite = Boolean(groupInviteCode || sessionInviteToken);
+  const seriesInviteToken = searchParams.get("seriesInvite")?.trim() || "";
+  const hasInvite = Boolean(
+    groupInviteCode || sessionInviteToken || seriesInviteToken,
+  );
 
   const [authMode, setAuthMode] = useState<AuthFormMode>("signin");
   const [invitePreview, setInvitePreview] = useState<InvitePreview | null>(
@@ -97,6 +102,7 @@ export function WelcomePage() {
       .invitePreview({
         groupCode: groupInviteCode || undefined,
         sessionToken: sessionInviteToken || undefined,
+        seriesToken: seriesInviteToken || undefined,
       })
       .then(({ preview }) => {
         if (!cancelled) {
@@ -120,7 +126,7 @@ export function WelcomePage() {
     return () => {
       cancelled = true;
     };
-  }, [hasInvite, groupInviteCode, sessionInviteToken]);
+  }, [hasInvite, groupInviteCode, sessionInviteToken, seriesInviteToken]);
 
   const completeInviteAsRegistered = async () => {
     if (groupInviteCode) {
@@ -139,6 +145,23 @@ export function WelcomePage() {
         navigate(`/join/${encodeURIComponent(groupInviteCode)}`, {
           replace: true,
         });
+      } finally {
+        setJoiningRegistered(false);
+      }
+      return;
+    }
+
+    if (seriesInviteToken) {
+      setJoiningRegistered(true);
+      try {
+        const { session } = await sessionsApi.joinSeries(
+          seriesInviteToken,
+          "going",
+        );
+        await refreshAll();
+        navigate(`/sessions/${session.id}`, { replace: true });
+      } catch {
+        navigate("/sessions", { replace: true });
       } finally {
         setJoiningRegistered(false);
       }
@@ -190,6 +213,7 @@ export function WelcomePage() {
         displayName: trimmed,
         groupInviteCode: groupInviteCode || undefined,
         sessionInviteToken: sessionInviteToken || undefined,
+        seriesShareToken: seriesInviteToken || undefined,
       });
 
       if (targetSessionId) {
@@ -378,13 +402,25 @@ export function WelcomePage() {
                 </div>
               ) : invitePreview ? (
                 <>
-                  <div className="inline-flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-forest-700">
-                    <Ticket className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>
-                      {invitePreview.kind === "group"
-                        ? "Invitación a un grupo"
-                        : "Invitación a una juntada"}
-                    </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="inline-flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-forest-700">
+                      <Ticket className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>
+                        {invitePreview.kind === "group"
+                          ? "Invitación a un grupo"
+                          : invitePreview.isRecurring
+                            ? "Juntada recurrente"
+                            : "Invitación a una juntada"}
+                      </span>
+                    </div>
+                    {invitePreview.kind === "session" &&
+                      invitePreview.isRecurring &&
+                      invitePreview.recurrenceFrequency && (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-forest-200 bg-surface px-2 py-0.5 text-[10px] font-bold text-forest-700">
+                          <Repeat className="h-3 w-3" aria-hidden="true" />
+                          {RECURRENCE_LABEL[invitePreview.recurrenceFrequency]}
+                        </span>
+                      )}
                   </div>
 
                   <p className="font-[var(--font-display)] text-lg font-bold text-ink leading-snug">
@@ -483,7 +519,7 @@ export function WelcomePage() {
                     />
                   )}
                   <span>
-                    {hasInvite
+                    {hasInvite && !inviteError
                       ? "Aceptar invitación y entrar"
                       : "Ir a mis juntadas"}
                   </span>

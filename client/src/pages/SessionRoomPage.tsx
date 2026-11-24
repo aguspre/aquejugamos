@@ -8,14 +8,19 @@ import {
   Clock,
   Crown,
   Dices,
+  FastForward,
+  History,
   Library,
   Link2,
   Loader2,
   Lock,
   MapPin,
   MessageSquareQuote,
+  Pause,
   Pencil,
+  Play,
   Plus,
+  Repeat,
   RotateCcw,
   Sparkles,
   ThumbsUp,
@@ -30,6 +35,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Link,
   Navigate,
+  useLocation,
   useNavigate,
   useParams,
   useSearchParams,
@@ -43,6 +49,7 @@ import { CancelOrDeleteSessionDialog } from "../components/sessions/CancelOrDele
 import { EditSessionModal } from "../components/sessions/EditSessionModal";
 import { FilterChipBar } from "../components/ui/FilterChipBar";
 import { OwnerAvatarStack } from "../components/ui/OwnerAvatarStack";
+import { PageLoadingSkeleton } from "../components/ui/PageLoadingSkeleton";
 import { UserAvatar } from "../components/ui/UserAvatar";
 import { PlayerCountBadge } from "../components/ui/PlayerCountBadge";
 import { WeightIndicator } from "../components/ui/WeightIndicator";
@@ -55,9 +62,37 @@ import type {
   RsvpStatus,
   SessionGameItem,
   SessionProposal,
+  SessionStatus,
 } from "../types/domain";
 import { DEFAULT_GAME_FILTERS, filterGames } from "../utils/filterGames";
 import { formatSessionDate } from "../utils/formatDate";
+import { getSessionShareUrl, RECURRENCE_LABEL } from "../utils/recurrence";
+
+const HISTORY_STATUS_META: Record<
+  SessionStatus,
+  { label: string; className: string }
+> = {
+  planning: {
+    label: "Planificando",
+    className: "border-teal-100 bg-teal-50 text-teal-700",
+  },
+  voting: {
+    label: "Votación abierta",
+    className: "border-terracotta-100 bg-terracotta-50 text-terracotta-700",
+  },
+  locked: {
+    label: "Votación cerrada",
+    className: "border-forest-200 bg-forest-50 text-forest-700",
+  },
+  completed: {
+    label: "Finalizada",
+    className: "border-border bg-canvas-subtle text-ink-muted",
+  },
+  cancelled: {
+    label: "Cancelada",
+    className: "border-terracotta-200 bg-terracotta-50 text-terracotta-700",
+  },
+};
 
 type ActiveTab = "proposals" | "pool";
 
@@ -88,10 +123,14 @@ const RSVP_RING: Record<RsvpStatus, string> = {
 export function SessionRoomPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const {
     isAuthenticated,
     isGuestSession,
+    backendUser,
+    backendSyncStatus,
+    backendSyncSlow,
     loading: authLoading,
     openAuthModal,
   } = useAuth();
@@ -101,6 +140,8 @@ export function SessionRoomPage() {
     loadSessionDetail,
     loadSessionPool,
     joinSessionByToken,
+    advanceSeries,
+    updateSeries,
     updateSession,
     cancelSession,
     reopenSession,
@@ -138,10 +179,14 @@ export function SessionRoomPage() {
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [editSessionOpen, setEditSessionOpen] = useState(false);
   const [deleteSessionOpen, setDeleteSessionOpen] = useState(false);
+  const [advanceConfirmOpen, setAdvanceConfirmOpen] = useState(false);
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [busyAction, setBusyAction] = useState(false);
   const removeDialogRef = useRef<HTMLDialogElement | null>(null);
+  const advanceDialogRef = useRef<HTMLDialogElement | null>(null);
   const voteSeqRef = useRef(0);
+  const roomLoadSeqRef = useRef(0);
+  const currentRoomIdRef = useRef<string | undefined>(id);
   const voteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const rsvpSeqRef = useRef(0);
   const rsvpQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -151,14 +196,22 @@ export function SessionRoomPage() {
   const shouldRedirectInviteToWelcome = Boolean(
     !authLoading && !isAuthenticated && inviteTokenParam,
   );
+  const isAwaitingBackendSync = Boolean(
+    isAuthenticated &&
+    (backendSyncStatus === "idle" || backendSyncStatus === "syncing"),
+  );
   const canLoadRoom = Boolean(
     !authLoading &&
+    !isAwaitingBackendSync &&
+    backendUser !== null &&
     (isAuthenticated || isGuestSession) &&
     !shouldRedirectInviteToWelcome,
   );
 
   const fetchRoomData = useCallback(async () => {
     if (!id || !canLoadRoom) return;
+    const loadSeq = ++roomLoadSeqRef.current;
+    const isStale = () => loadSeq !== roomLoadSeqRef.current;
     setErrorMsg(null);
 
     try {
@@ -168,6 +221,7 @@ export function SessionRoomPage() {
 
       if (inviteToken) {
         loadedSession = await joinSessionByToken(inviteToken, "going");
+        if (isStale()) return;
         setSearchParams({}, { replace: true });
         pool = await loadSessionPool(loadedSession.id);
       } else {
@@ -177,17 +231,19 @@ export function SessionRoomPage() {
         ]);
       }
 
+      if (isStale()) return;
       lastConfirmedSessionRef.current = loadedSession;
       setSession(loadedSession);
       setSessionPool(pool);
     } catch (err) {
+      if (isStale()) return;
       setErrorMsg(
         err instanceof ApiError
           ? err.message
           : "No se pudo cargar la sala de la juntada.",
       );
     } finally {
-      setLoading(false);
+      if (!isStale()) setLoading(false);
     }
   }, [
     id,
@@ -200,10 +256,53 @@ export function SessionRoomPage() {
   ]);
 
   useEffect(() => {
+    const state = location.state as { notice?: string } | null;
+    if (state?.notice) {
+      setActionNotice(state.notice);
+      navigate(location.pathname + location.search, {
+        replace: true,
+        state: null,
+      });
+    }
+  }, [location.state, location.pathname, location.search, navigate]);
+
+  useEffect(() => {
+    currentRoomIdRef.current = id;
+    setSession((prev) => (prev?.id === id ? prev : null));
+    if (lastConfirmedSessionRef.current?.id !== id) {
+      lastConfirmedSessionRef.current = null;
+    }
+    setSessionPool([]);
+    setActiveTab("proposals");
+    setErrorMsg(null);
+    setCopiedInvite(false);
+    setAdvanceConfirmOpen(false);
+    setEditSessionOpen(false);
+    setDeleteSessionOpen(false);
+    setSelectedGame(null);
+    setProposingGame(null);
+    setProposalToRemoveId(null);
+    voteSeqRef.current += 1;
+    rsvpSeqRef.current += 1;
+  }, [id]);
+
+  useEffect(() => {
     if (!canLoadRoom) return;
     setLoading(true);
     void fetchRoomData();
   }, [canLoadRoom, fetchRoomData]);
+
+  useEffect(() => {
+    const dialog = advanceDialogRef.current;
+    if (!dialog) return;
+    if (advanceConfirmOpen) {
+      if (!dialog.open) {
+        dialog.showModal();
+      }
+    } else if (dialog.open) {
+      dialog.close();
+    }
+  }, [advanceConfirmOpen]);
 
   const proposalToRemove = useMemo(
     () =>
@@ -289,15 +388,9 @@ export function SessionRoomPage() {
     );
   }
 
-  if ((authLoading || loading) && !session) {
+  if ((authLoading || isAwaitingBackendSync || loading) && !session) {
     return (
-      <div className="flex items-center justify-center py-20 text-ink-muted gap-2">
-        <Loader2
-          className="h-5 w-5 animate-spin text-forest-600"
-          aria-hidden="true"
-        />
-        <span className="text-sm font-semibold">Cargando sala de juntada…</span>
-      </div>
+      <PageLoadingSkeleton variant="session-room" slow={backendSyncSlow} />
     );
   }
 
@@ -442,7 +535,9 @@ export function SessionRoomPage() {
             nextRsvp,
             baseSnapshot,
           );
-          lastConfirmedSessionRef.current = updated;
+          if (baseSnapshot.id === currentRoomIdRef.current) {
+            lastConfirmedSessionRef.current = updated;
+          }
           if (seq === rsvpSeqRef.current) {
             setSession(updated);
             try {
@@ -455,6 +550,7 @@ export function SessionRoomPage() {
             }
           }
         } catch (err) {
+          if (baseSnapshot.id !== currentRoomIdRef.current) return;
           if (seq === rsvpSeqRef.current && lastConfirmedSessionRef.current) {
             setSession(lastConfirmedSessionRef.current);
           }
@@ -495,11 +591,14 @@ export function SessionRoomPage() {
             requestedRank,
             baseSnapshot,
           );
-          lastConfirmedSessionRef.current = updated;
+          if (baseSnapshot.id === currentRoomIdRef.current) {
+            lastConfirmedSessionRef.current = updated;
+          }
           if (seq === voteSeqRef.current) {
             setSession(updated);
           }
         } catch (err) {
+          if (baseSnapshot.id !== currentRoomIdRef.current) return;
           if (seq === voteSeqRef.current && lastConfirmedSessionRef.current) {
             setSession(lastConfirmedSessionRef.current);
           }
@@ -513,10 +612,84 @@ export function SessionRoomPage() {
   };
 
   const handleCopyInvite = () => {
-    const url = `${window.location.origin}/sessions/${session.id}?invite=${session.inviteToken}`;
+    const url = getSessionShareUrl(session);
     void navigator.clipboard?.writeText(url);
     setCopiedInvite(true);
     setTimeout(() => setCopiedInvite(false), 2000);
+  };
+
+  const handleConfirmAdvanceSeries = async () => {
+    if (!session?.series) return;
+    setBusyAction(true);
+    setErrorMsg(null);
+    setActionNotice(null);
+    try {
+      await drainOptimisticQueues();
+      const nextSession = await advanceSeries(session.series.id);
+      setAdvanceConfirmOpen(false);
+      navigate(`/sessions/${nextSession.id}`, {
+        state: {
+          notice:
+            "Se archivó la fecha anterior y se abrió la próxima juntada de la serie.",
+        },
+      });
+    } catch (err) {
+      setAdvanceConfirmOpen(false);
+      setErrorMsg(
+        err instanceof ApiError
+          ? err.message
+          : "No se pudo avanzar a la próxima fecha de la serie.",
+      );
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleToggleSeriesActive = async () => {
+    if (!session?.series) return;
+    const nextIsActive = !session.series.isActive;
+    setBusyAction(true);
+    setErrorMsg(null);
+    setActionNotice(null);
+    try {
+      await drainOptimisticQueues();
+      const result = await updateSeries(session.series.id, {
+        isActive: nextIsActive,
+      });
+      if (
+        nextIsActive &&
+        result.activeSessionId &&
+        result.activeSessionId !== session.id
+      ) {
+        navigate(`/sessions/${result.activeSessionId}`, {
+          state: {
+            notice:
+              "Se reactivó la serie recurrente y se abrió la próxima juntada.",
+          },
+        });
+        return;
+      }
+
+      const updated: GameSession = {
+        ...session,
+        series: result.series,
+      };
+      lastConfirmedSessionRef.current = updated;
+      setSession(updated);
+      setActionNotice(
+        nextIsActive
+          ? "La recurrencia volvió a estar activa."
+          : "La recurrencia quedó pausada. No se abrirán fechas nuevas hasta reactivarla.",
+      );
+    } catch (err) {
+      setErrorMsg(
+        err instanceof ApiError
+          ? err.message
+          : "No se pudo actualizar el estado de la serie recurrente.",
+      );
+    } finally {
+      setBusyAction(false);
+    }
   };
 
   const handleConfirmProposal = async (game: Game, note?: string) => {
@@ -666,10 +839,15 @@ export function SessionRoomPage() {
         </Link>
 
         <div className="flex flex-wrap items-center gap-2">
-          {isAuthenticated && !isClosed && (
+          {isAuthenticated && (!isClosed || Boolean(session.series)) && (
             <button
               type="button"
               onClick={handleCopyInvite}
+              title={
+                session.series
+                  ? "Copiar link fijo de la serie recurrente"
+                  : "Copiar link de invitación"
+              }
               className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-border bg-surface px-3 text-xs font-semibold text-ink hover:border-border-strong transition"
             >
               {copiedInvite ? (
@@ -686,7 +864,9 @@ export function SessionRoomPage() {
                     className="h-3.5 w-3.5 text-ink-muted"
                     aria-hidden="true"
                   />
-                  <span>Copiar link</span>
+                  <span>
+                    {session.series ? "Copiar link fijo" : "Copiar link"}
+                  </span>
                 </>
               )}
             </button>
@@ -858,6 +1038,19 @@ export function SessionRoomPage() {
               <span className="text-xs font-semibold text-ink-subtle">
                 {session.groupName}
               </span>
+              {session.series && (
+                <span
+                  className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-bold ${
+                    session.series.isActive
+                      ? "border-teal-100 bg-teal-50 text-teal-700"
+                      : "border-border bg-canvas-subtle text-ink-muted"
+                  }`}
+                >
+                  <Repeat className="h-3 w-3" aria-hidden="true" />
+                  Recurrente · {RECURRENCE_LABEL[session.series.frequency]}
+                  {!session.series.isActive ? " · Pausada" : ""}
+                </span>
+              )}
             </div>
 
             <h1 className="font-[var(--font-display)] text-2xl sm:text-3xl font-bold tracking-tight text-ink">
@@ -962,6 +1155,87 @@ export function SessionRoomPage() {
             </div>
           </div>
         </div>
+
+        {/* Recurring Series Strip */}
+        {session.series && (
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-2xl border border-teal-100 bg-teal-50/55 px-4 py-3">
+            <div className="min-w-0 space-y-0.5">
+              <p className="flex items-center gap-1.5 text-xs font-bold text-teal-800">
+                <Repeat className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span>
+                  {session.series.isActive
+                    ? `Serie ${RECURRENCE_LABEL[session.series.frequency].toLowerCase()} con link fijo`
+                    : "Serie recurrente pausada"}
+                </span>
+              </p>
+              <p className="text-[11px] text-ink-muted">
+                {session.series.isActive
+                  ? "Compartí el link fijo una sola vez: siempre abre la próxima juntada activa y archiva las pasadas en el historial."
+                  : "Mientras esté pausada no se generarán nuevas fechas automáticamente."}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {(() => {
+                const activeSibling = isClosed
+                  ? (session.seriesHistory ?? []).find(
+                      (occ) =>
+                        occ.status === "planning" ||
+                        occ.status === "voting" ||
+                        occ.status === "locked",
+                    )
+                  : null;
+                return activeSibling ? (
+                  <Link
+                    to={`/sessions/${activeSibling.id}`}
+                    className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-forest-600 px-3 text-xs font-bold text-white hover:bg-forest-700 transition"
+                  >
+                    <span>Ir a la juntada activa</span>
+                  </Link>
+                ) : null;
+              })()}
+
+              {canManage && session.series.isActive && !isClosed && (
+                <button
+                  type="button"
+                  disabled={busyAction}
+                  onClick={() => setAdvanceConfirmOpen(true)}
+                  className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-bold text-white hover:bg-teal-800 disabled:opacity-60 transition"
+                >
+                  <FastForward className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Finalizar y abrir próxima</span>
+                </button>
+              )}
+
+              {canManage && (
+                <button
+                  type="button"
+                  disabled={busyAction}
+                  onClick={() => void handleToggleSeriesActive()}
+                  className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-border-strong bg-surface px-3 text-xs font-semibold text-ink hover:bg-canvas-subtle disabled:opacity-60 transition"
+                >
+                  {session.series.isActive ? (
+                    <>
+                      <Pause
+                        className="h-3.5 w-3.5 text-ink-muted"
+                        aria-hidden="true"
+                      />
+                      <span>Pausar recurrencia</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play
+                        className="h-3.5 w-3.5 text-forest-600"
+                        aria-hidden="true"
+                      />
+                      <span>Reactivar recurrencia</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </section>
 
       {/* 2-Tab Switch */}
@@ -1575,7 +1849,8 @@ export function SessionRoomPage() {
                               </button>
                             )}
 
-                            {session.status === "cancelled" ? null : isLocked || isClosed ? (
+                            {session.status === "cancelled" ? null : isLocked ||
+                              isClosed ? (
                               <button
                                 type="button"
                                 onClick={() =>
@@ -1856,6 +2131,161 @@ export function SessionRoomPage() {
           )}
         </section>
       )}
+
+      {/* Recurring Series History */}
+      {session.series && (session.seriesHistory?.length ?? 0) > 0 && (
+        <section
+          aria-labelledby="series-history-heading"
+          className="rounded-3xl border border-border bg-surface p-5 space-y-4 shadow-[var(--shadow-card)]"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="space-y-0.5">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-teal-700">
+                <History className="h-3.5 w-3.5" aria-hidden="true" />
+                Serie recurrente
+              </span>
+              <h2
+                id="series-history-heading"
+                className="font-[var(--font-display)] text-lg font-bold text-ink"
+              >
+                Otras fechas de esta serie ({session.seriesHistory!.length})
+              </h2>
+            </div>
+          </div>
+
+          <div className="space-y-2.5">
+            {session.seriesHistory!.map((occ) => {
+              const occStatus = HISTORY_STATUS_META[occ.status];
+              const isOccActive =
+                occ.status === "planning" ||
+                occ.status === "voting" ||
+                occ.status === "locked";
+
+              return (
+                <div
+                  key={occ.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-canvas/55 px-4 py-3"
+                >
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-bold text-ink num-tabular">
+                        {formatSessionDate(occ.scheduledAt)}
+                      </span>
+                      <span
+                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold ${occStatus.className}`}
+                      >
+                        {occStatus.label}
+                      </span>
+                    </div>
+                    <p className="text-xs text-ink-muted num-tabular">
+                      {occ.confirmedCount}{" "}
+                      {occ.confirmedCount === 1 ? "confirmado" : "confirmados"}
+                      {occ.acceptedGames.length > 0
+                        ? ` · Mesa: ${occ.acceptedGames.join(", ")}`
+                        : ""}
+                    </p>
+                  </div>
+
+                  <Link
+                    to={`/sessions/${occ.id}`}
+                    className={`inline-flex min-h-9 items-center gap-1 rounded-lg px-3 text-xs font-bold transition ${
+                      isOccActive
+                        ? "bg-forest-600 text-white hover:bg-forest-700"
+                        : "border border-border bg-surface text-forest-700 hover:border-forest-200 hover:bg-forest-50"
+                    }`}
+                  >
+                    {isOccActive ? "Abrir activa" : "Ver resumen"}
+                  </Link>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Confirm Advance Series Modal */}
+      <dialog
+        ref={advanceDialogRef}
+        aria-labelledby="advance-series-title"
+        aria-describedby="advance-series-description"
+        onCancel={(e) => {
+          e.preventDefault();
+          if (!busyAction) setAdvanceConfirmOpen(false);
+        }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget && !busyAction) {
+            setAdvanceConfirmOpen(false);
+          }
+        }}
+        className="m-auto w-[calc(100%-2rem)] max-w-md rounded-3xl border border-border bg-surface p-0 text-ink shadow-[var(--shadow-floating)]"
+      >
+        {advanceConfirmOpen && session.series && (
+          <div className="p-5 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-0.5">
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-teal-700">
+                  <Repeat className="h-3.5 w-3.5" aria-hidden="true" />
+                  Serie{" "}
+                  {RECURRENCE_LABEL[session.series.frequency].toLowerCase()}
+                </span>
+                <h3
+                  id="advance-series-title"
+                  className="font-[var(--font-display)] text-lg font-bold text-ink"
+                >
+                  ¿Finalizar esta fecha y abrir la próxima?
+                </h3>
+              </div>
+              <button
+                type="button"
+                disabled={busyAction}
+                onClick={() => setAdvanceConfirmOpen(false)}
+                aria-label="Cerrar"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-ink-muted hover:bg-canvas-subtle disabled:opacity-50"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <p
+              id="advance-series-description"
+              className="text-sm text-ink-muted leading-relaxed"
+            >
+              Esta juntada pasará al historial como{" "}
+              <strong className="text-ink">Finalizada</strong> y se creará
+              automáticamente la próxima fecha con los miembros actuales del
+              grupo, manteniendo el mismo link fijo.
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                autoFocus
+                disabled={busyAction}
+                onClick={() => setAdvanceConfirmOpen(false)}
+                className="min-h-10 rounded-xl border border-border bg-surface px-4 text-xs font-semibold text-ink-muted hover:bg-canvas-subtle disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={busyAction}
+                onClick={() => void handleConfirmAdvanceSeries()}
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-bold text-white hover:bg-teal-800 disabled:opacity-70 transition"
+              >
+                {busyAction ? (
+                  <Loader2
+                    className="h-3.5 w-3.5 animate-spin"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <FastForward className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+                Sí, abrir próxima fecha
+              </button>
+            </div>
+          </div>
+        )}
+      </dialog>
 
       {/* Quick Propose Note Mini-Modal */}
       {proposingGame && (

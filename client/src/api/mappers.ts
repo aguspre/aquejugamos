@@ -5,9 +5,12 @@ import type {
   LibraryGameItem,
   PlayLog,
   ProposalStatus,
+  RecurrenceFrequency,
   RsvpStatus,
   SessionGameItem,
   SessionProposal,
+  SessionSeriesHistoryItem,
+  SessionSeriesSummary,
   SessionStatus,
   UserGameStatus,
   UserSummary,
@@ -103,6 +106,22 @@ export interface ApiGroup {
   }[];
 }
 
+export interface ApiSessionSeriesSummary {
+  id: string;
+  frequency: RecurrenceFrequency;
+  shareToken: string | null;
+  isActive: boolean;
+}
+
+export interface ApiSessionSeriesHistoryItem {
+  id: string;
+  title: string;
+  scheduledAt: string;
+  status: SessionStatus;
+  confirmedCount: number;
+  acceptedGames: string[];
+}
+
 export interface ApiSessionListItem {
   id: string;
   groupId: string | null;
@@ -115,6 +134,7 @@ export interface ApiSessionListItem {
   maxVotesPerUser: number;
   maxProposalsPerUser?: number | null;
   inviteToken: string;
+  series?: ApiSessionSeriesSummary | null;
   host: ApiUserSummary;
   canManageSession?: boolean;
   confirmedCount: number;
@@ -162,6 +182,8 @@ export interface ApiSessionDetail {
   maxVotesPerUser: number;
   maxProposalsPerUser?: number | null;
   inviteToken: string;
+  series?: ApiSessionSeriesSummary | null;
+  seriesHistory?: ApiSessionSeriesHistoryItem[];
   host: ApiUserSummary;
   canManageSession?: boolean;
   confirmedCount: number;
@@ -400,6 +422,24 @@ export function mapSessionDetail(detail: ApiSessionDetail): GameSession {
     lockedVotesCount: detail.lockedVotesCount,
     lockedRanks: detail.lockedRanks,
     inviteToken: detail.inviteToken,
+    series: detail.series
+      ? ({
+          id: detail.series.id,
+          frequency: detail.series.frequency,
+          shareToken: detail.series.shareToken,
+          isActive: detail.series.isActive,
+        } satisfies SessionSeriesSummary)
+      : null,
+    seriesHistory: (detail.seriesHistory ?? []).map(
+      (item): SessionSeriesHistoryItem => ({
+        id: item.id,
+        title: item.title,
+        scheduledAt: item.scheduledAt,
+        status: item.status,
+        confirmedCount: item.confirmedCount,
+        acceptedGames: item.acceptedGames,
+      }),
+    ),
     participants: detail.participants.map((p) => ({
       rsvp: p.rsvp,
       user: mapUserSummary(p.user),
@@ -639,6 +679,14 @@ export function mapSessionListItem(item: ApiSessionListItem): GameSession {
     maxVotesPerUser: item.maxVotesPerUser,
     maxProposalsPerUser: item.maxProposalsPerUser ?? null,
     inviteToken: item.inviteToken,
+    series: item.series
+      ? ({
+          id: item.series.id,
+          frequency: item.series.frequency,
+          shareToken: item.series.shareToken,
+          isActive: item.series.isActive,
+        } satisfies SessionSeriesSummary)
+      : null,
     participants: item.participants.map((p) => ({
       rsvp: p.rsvp,
       user: mapUserSummary(p.user),

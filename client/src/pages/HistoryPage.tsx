@@ -7,21 +7,21 @@ import {
   Flame,
   Ghost,
   History,
-  Loader2,
   Plus,
   Trophy,
   Users,
-} from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { mapUserSummary } from '../api/mappers';
-import { GuestLockedView } from '../components/auth/GuestLockedView';
-import { OwnerAvatarStack } from '../components/ui/OwnerAvatarStack';
-import { UserAvatar } from '../components/ui/UserAvatar';
-import { useAppState } from '../context/AppStateContext';
-import { useAuth } from '../context/AuthContext';
-import type { Game } from '../types/domain';
-import { formatShortDate } from '../utils/formatDate';
+} from "lucide-react";
+import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { mapUserSummary } from "../api/mappers";
+import { GuestLockedView } from "../components/auth/GuestLockedView";
+import { OwnerAvatarStack } from "../components/ui/OwnerAvatarStack";
+import { PageLoadingSkeleton } from "../components/ui/PageLoadingSkeleton";
+import { UserAvatar } from "../components/ui/UserAvatar";
+import { useAppState } from "../context/AppStateContext";
+import { useAuth } from "../context/AuthContext";
+import type { Game } from "../types/domain";
+import { formatShortDate } from "../utils/formatDate";
 
 export function HistoryPage() {
   const { isAuthenticated, loading: authLoading } = useAuth();
@@ -35,7 +35,9 @@ export function HistoryPage() {
     proposeGame,
   } = useAppState();
 
-  const [proposedFeedbackId, setProposedFeedbackId] = useState<string | null>(null);
+  const [proposedFeedbackId, setProposedFeedbackId] = useState<string | null>(
+    null,
+  );
 
   const visiblePlayLogs = useMemo(
     () =>
@@ -46,15 +48,18 @@ export function HistoryPage() {
   );
 
   const activeVotingSession = activeGroup
-    ? sessions.find((s) => s.groupId === activeGroup.id && s.status === 'voting') ??
+    ? (sessions.find(
+        (s) => s.groupId === activeGroup.id && s.status === "voting",
+      ) ??
       sessions.find((s) => s.groupId === activeGroup.id) ??
-      sessions[0]
+      sessions[0])
     : sessions[0];
 
   const totalHours = activeGroupStats
     ? Math.round((activeGroupStats.totalDurationMinutes / 60) * 10) / 10
     : Math.round(
-        (visiblePlayLogs.reduce((acc, l) => acc + l.durationMinutes, 0) / 60) * 10,
+        (visiblePlayLogs.reduce((acc, l) => acc + l.durationMinutes, 0) / 60) *
+          10,
       ) / 10;
 
   const handleProposeShameGame = async (gameId: string, gameName: string) => {
@@ -64,8 +69,8 @@ export function HistoryPage() {
       bggId: 0,
       name: gameName,
       yearPublished: 0,
-      imageUrl: '',
-      thumbnailUrl: '',
+      imageUrl: "",
+      thumbnailUrl: "",
       minPlayers: 1,
       maxPlayers: 4,
       bestPlayers: [],
@@ -79,7 +84,7 @@ export function HistoryPage() {
       await proposeGame(
         activeVotingSession.id,
         minimalGame,
-        '¡Salgamos de la pila de la vergüenza!',
+        "¡Salgamos de la pila de la vergüenza!",
       );
       setProposedFeedbackId(gameId);
       setTimeout(() => setProposedFeedbackId(null), 2500);
@@ -98,9 +103,9 @@ export function HistoryPage() {
         lockTitle="El historial requiere una cuenta"
         lockDescription="En modo invitado no podés consultar el historial de partidas ni registrar resultados. Iniciá sesión para acceder a las estadísticas de tu grupo."
         benefits={[
-          'Llevá el registro de todas las partidas jugadas con puntajes y ganadores.',
-          'Consultá el ranking de victorias y los títulos más jugados del grupo.',
-          'Descubrí la pila de la vergüenza con juegos aún sin estrenar.',
+          "Llevá el registro de todas las partidas jugadas con puntajes y ganadores.",
+          "Consultá el ranking de victorias y los títulos más jugados del grupo.",
+          "Descubrí la pila de la vergüenza con juegos aún sin estrenar.",
         ]}
       />
     );
@@ -112,14 +117,14 @@ export function HistoryPage() {
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-1">
           <span className="text-xs font-bold uppercase tracking-wider text-forest-600">
-            {activeGroup ? activeGroup.name : 'Tu historial personal'}
+            {activeGroup ? activeGroup.name : "Tu historial personal"}
           </span>
           <h1 className="font-[var(--font-display)] text-3xl sm:text-4xl font-bold tracking-tight text-ink">
             Historial & Estadísticas
           </h1>
           <p className="text-sm sm:text-base text-ink-muted">
-            Registro de partidas del grupo, tabla de victorias y juegos que todavía esperan
-            su estreno en mesa.
+            Registro de partidas del grupo, tabla de victorias y juegos que
+            todavía esperan su estreno en mesa.
           </p>
         </div>
 
@@ -134,10 +139,7 @@ export function HistoryPage() {
       </header>
 
       {isBootstrapping ? (
-        <div className="flex items-center justify-center py-16 text-ink-muted gap-2">
-          <Loader2 className="h-5 w-5 animate-spin text-forest-600" aria-hidden="true" />
-          <span className="text-sm font-semibold">Cargando historial…</span>
-        </div>
+        <PageLoadingSkeleton variant="history" />
       ) : (
         <>
           {/* Mini-Dashboard (when active group exists) */}
@@ -147,7 +149,10 @@ export function HistoryPage() {
               <div className="rounded-2xl border border-border bg-surface p-5 shadow-[var(--shadow-card)] flex flex-col justify-between gap-4">
                 <div className="flex items-center justify-between">
                   <h2 className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-ink-subtle">
-                    <Flame className="h-4 w-4 text-terracotta-500" aria-hidden="true" />
+                    <Flame
+                      className="h-4 w-4 text-terracotta-500"
+                      aria-hidden="true"
+                    />
                     Más jugados
                   </h2>
                   <span className="rounded-full bg-canvas-subtle px-2.5 py-0.5 text-[11px] font-bold text-ink-muted num-tabular">
@@ -161,30 +166,34 @@ export function HistoryPage() {
                   </p>
                 ) : (
                   <ul className="space-y-2.5">
-                    {activeGroupStats.mostPlayedGames.slice(0, 4).map((entry) => {
-                      const maxCount =
-                        activeGroupStats.mostPlayedGames[0]?.playCount ?? 1;
-                      const pct = Math.round((entry.playCount / maxCount) * 100);
-                      return (
-                        <li key={entry.game.id} className="space-y-1">
-                          <div className="flex items-center justify-between gap-2 text-xs">
-                            <span className="font-bold text-ink truncate">
-                              {entry.game.name}
-                            </span>
-                            <span className="font-extrabold text-forest-700 num-tabular shrink-0">
-                              {entry.playCount}{' '}
-                              {entry.playCount === 1 ? 'vez' : 'veces'}
-                            </span>
-                          </div>
-                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-canvas-subtle">
-                            <div
-                              className="h-full rounded-full bg-forest-500"
-                              style={{ width: `${pct}%` }}
-                            />
-                          </div>
-                        </li>
-                      );
-                    })}
+                    {activeGroupStats.mostPlayedGames
+                      .slice(0, 4)
+                      .map((entry) => {
+                        const maxCount =
+                          activeGroupStats.mostPlayedGames[0]?.playCount ?? 1;
+                        const pct = Math.round(
+                          (entry.playCount / maxCount) * 100,
+                        );
+                        return (
+                          <li key={entry.game.id} className="space-y-1">
+                            <div className="flex items-center justify-between gap-2 text-xs">
+                              <span className="font-bold text-ink truncate">
+                                {entry.game.name}
+                              </span>
+                              <span className="font-extrabold text-forest-700 num-tabular shrink-0">
+                                {entry.playCount}{" "}
+                                {entry.playCount === 1 ? "vez" : "veces"}
+                              </span>
+                            </div>
+                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-canvas-subtle">
+                              <div
+                                className="h-full rounded-full bg-forest-500"
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </li>
+                        );
+                      })}
                   </ul>
                 )}
               </div>
@@ -193,7 +202,10 @@ export function HistoryPage() {
               <div className="rounded-2xl border border-border bg-surface p-5 shadow-[var(--shadow-card)] space-y-4">
                 <div className="flex items-center justify-between">
                   <h2 className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-ink-subtle">
-                    <Trophy className="h-4 w-4 text-ochre-500" aria-hidden="true" />
+                    <Trophy
+                      className="h-4 w-4 text-ochre-500"
+                      aria-hidden="true"
+                    />
                     Tabla de victorias
                   </h2>
                   <span className="text-[11px] font-medium text-ink-subtle">
@@ -222,12 +234,16 @@ export function HistoryPage() {
                               {mappedUser.displayName}
                             </p>
                             <p className="text-[10px] text-ink-subtle num-tabular">
-                              {row.playedCount} jugadas · {row.winRate}% win rate
+                              {row.playedCount} jugadas · {row.winRate}% win
+                              rate
                             </p>
                           </div>
                         </div>
                         <span className="inline-flex items-center gap-1 rounded-full bg-ochre-50 border border-ochre-100 px-2.5 py-0.5 text-xs font-extrabold text-ochre-700 num-tabular">
-                          <Crown className="h-3 w-3 text-ochre-500" aria-hidden="true" />
+                          <Crown
+                            className="h-3 w-3 text-ochre-500"
+                            aria-hidden="true"
+                          />
                           {row.winsCount}
                         </span>
                       </li>
@@ -240,7 +256,10 @@ export function HistoryPage() {
               <div className="rounded-2xl border border-border bg-surface p-5 shadow-[var(--shadow-card)] flex flex-col gap-4">
                 <div className="flex items-center justify-between">
                   <h2 className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-ink-subtle">
-                    <Ghost className="h-4 w-4 text-forest-600" aria-hidden="true" />
+                    <Ghost
+                      className="h-4 w-4 text-forest-600"
+                      aria-hidden="true"
+                    />
                     Pila de la vergüenza
                   </h2>
                   <span className="rounded-full bg-terracotta-50 px-2.5 py-0.5 text-[11px] font-bold text-terracotta-700 num-tabular">
@@ -250,8 +269,8 @@ export function HistoryPage() {
 
                 {activeGroupStats.shelfOfShame.length === 0 ? (
                   <p className="text-xs text-ink-subtle py-4">
-                    ¡No hay juegos pendientes sin estrenar en este grupo (o falta sincronizar
-                    ludotecas)!
+                    ¡No hay juegos pendientes sin estrenar en este grupo (o
+                    falta sincronizar ludotecas)!
                   </p>
                 ) : (
                   <ul className="space-y-2 overflow-y-auto max-h-56 pr-1">
@@ -294,18 +313,24 @@ export function HistoryPage() {
                               }
                               className={`shrink-0 inline-flex min-h-8 items-center gap-1 rounded-lg px-2.5 text-[11px] font-bold transition ${
                                 alreadyProposed || justProposed
-                                  ? 'bg-forest-50 text-forest-700 border border-forest-200'
-                                  : 'bg-forest-600 text-white hover:bg-forest-700'
+                                  ? "bg-forest-50 text-forest-700 border border-forest-200"
+                                  : "bg-forest-600 text-white hover:bg-forest-700"
                               }`}
                             >
                               {alreadyProposed || justProposed ? (
                                 <>
-                                  <Check className="h-3 w-3" aria-hidden="true" />
+                                  <Check
+                                    className="h-3 w-3"
+                                    aria-hidden="true"
+                                  />
                                   Propuesto
                                 </>
                               ) : (
                                 <>
-                                  <Plus className="h-3 w-3" aria-hidden="true" />
+                                  <Plus
+                                    className="h-3 w-3"
+                                    aria-hidden="true"
+                                  />
                                   Proponer
                                 </>
                               )}
@@ -329,7 +354,8 @@ export function HistoryPage() {
                     Creá o unite a un grupo para ver estadísticas grupales
                   </p>
                   <p className="text-xs text-ink-muted">
-                    Tabla de victorias, juegos más jugados y pila de la vergüenza del grupo.
+                    Tabla de victorias, juegos más jugados y pila de la
+                    vergüenza del grupo.
                   </p>
                 </div>
               </div>
@@ -380,11 +406,17 @@ export function HistoryPage() {
                           <div>
                             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-subtle">
                               <span className="inline-flex items-center gap-1 font-semibold num-tabular">
-                                <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+                                <CalendarDays
+                                  className="h-3.5 w-3.5"
+                                  aria-hidden="true"
+                                />
                                 {formatShortDate(log.playedAt)}
                               </span>
                               <span className="inline-flex items-center gap-1 num-tabular">
-                                <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+                                <Clock
+                                  className="h-3.5 w-3.5"
+                                  aria-hidden="true"
+                                />
                                 {log.durationMinutes} min
                               </span>
                               {log.sessionTitle && (
@@ -401,8 +433,13 @@ export function HistoryPage() {
 
                           {winners.length > 0 && (
                             <span className="inline-flex items-center gap-1.5 rounded-full border border-ochre-100 bg-ochre-50 px-3 py-1 text-xs font-extrabold text-ochre-700">
-                              <Crown className="h-3.5 w-3.5 text-ochre-500" aria-hidden="true" />
-                              {winners.map((w) => w.user.displayName).join(' & ')}
+                              <Crown
+                                className="h-3.5 w-3.5 text-ochre-500"
+                                aria-hidden="true"
+                              />
+                              {winners
+                                .map((w) => w.user.displayName)
+                                .join(" & ")}
                             </span>
                           )}
                         </div>
@@ -413,8 +450,8 @@ export function HistoryPage() {
                               key={entry.user.id}
                               className={`inline-flex items-center gap-2 rounded-xl border px-2.5 py-1.5 text-xs ${
                                 entry.isWinner
-                                  ? 'border-ochre-500/40 bg-ochre-50/70 font-bold text-ink'
-                                  : 'border-border bg-canvas/60 text-ink-muted'
+                                  ? "border-ochre-500/40 bg-ochre-50/70 font-bold text-ink"
+                                  : "border-border bg-canvas/60 text-ink-muted"
                               }`}
                             >
                               <UserAvatar
@@ -451,12 +488,16 @@ export function HistoryPage() {
 
             {visiblePlayLogs.length === 0 && (
               <div className="rounded-2xl border border-dashed border-border-strong bg-surface/70 p-10 text-center space-y-2">
-                <Dices className="mx-auto h-8 w-8 text-ink-subtle" aria-hidden="true" />
+                <Dices
+                  className="mx-auto h-8 w-8 text-ink-subtle"
+                  aria-hidden="true"
+                />
                 <p className="font-[var(--font-display)] text-lg font-bold text-ink">
                   Aún no hay partidas registradas
                 </p>
                 <p className="text-sm text-ink-muted">
-                  Tocá <strong>Registrar partida</strong> cuando terminen su próxima mesa.
+                  Tocá <strong>Registrar partida</strong> cuando terminen su
+                  próxima mesa.
                 </p>
               </div>
             )}

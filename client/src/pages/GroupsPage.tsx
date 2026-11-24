@@ -15,15 +15,16 @@ import {
   UserMinus,
   Users,
   X,
-} from 'lucide-react';
-import { useEffect, useState, type FormEvent } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { ApiError } from '../api/client';
-import { GuestLockedView } from '../components/auth/GuestLockedView';
-import { OwnerAvatarStack } from '../components/ui/OwnerAvatarStack';
-import { UserAvatar } from '../components/ui/UserAvatar';
-import { useAppState } from '../context/AppStateContext';
-import { useAuth } from '../context/AuthContext';
+} from "lucide-react";
+import { useEffect, useState, type FormEvent } from "react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { ApiError } from "../api/client";
+import { GuestLockedView } from "../components/auth/GuestLockedView";
+import { OwnerAvatarStack } from "../components/ui/OwnerAvatarStack";
+import { PageLoadingSkeleton } from "../components/ui/PageLoadingSkeleton";
+import { UserAvatar } from "../components/ui/UserAvatar";
+import { useAppState } from "../context/AppStateContext";
+import { useAuth } from "../context/AuthContext";
 
 export function GroupsPage() {
   const { isAuthenticated, loading: authLoading } = useAuth();
@@ -46,13 +47,15 @@ export function GroupsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { inviteCode: routeInviteCode } = useParams<{ inviteCode?: string }>();
 
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(activeGroupId);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(
+    activeGroupId,
+  );
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [joinModalOpen, setJoinModalOpen] = useState(false);
-  const [newGroupName, setNewGroupName] = useState('');
-  const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [newGroupName, setNewGroupName] = useState("");
+  const [joinCodeInput, setJoinCodeInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [copiedType, setCopiedType] = useState<'code' | 'link' | null>(null);
+  const [copiedType, setCopiedType] = useState<"code" | "link" | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -63,11 +66,11 @@ export function GroupsPage() {
   }, [activeGroupId, selectedGroupId]);
 
   useEffect(() => {
-    const action = searchParams.get('action');
-    if (action === 'create') {
+    const action = searchParams.get("action");
+    if (action === "create") {
       setCreateModalOpen(true);
       setSearchParams({}, { replace: true });
-    } else if (action === 'join') {
+    } else if (action === "join") {
       setJoinModalOpen(true);
       setSearchParams({}, { replace: true });
     }
@@ -92,10 +95,10 @@ export function GroupsPage() {
     setTimeout(() => setFeedback(null), 3500);
   };
 
-  const handleCopy = (type: 'code' | 'link') => {
+  const handleCopy = (type: "code" | "link") => {
     if (!selectedGroup) return;
     const text =
-      type === 'code'
+      type === "code"
         ? selectedGroup.inviteCode
         : `${window.location.origin}/join/${selectedGroup.inviteCode}`;
     void navigator.clipboard?.writeText(text);
@@ -111,11 +114,15 @@ export function GroupsPage() {
     try {
       const created = await createGroup(newGroupName.trim());
       setSelectedGroupId(created.id);
-      setNewGroupName('');
+      setNewGroupName("");
       setCreateModalOpen(false);
-      showToast(`¡Grupo "${created.name}" creado! Compartí el código ${created.inviteCode}.`);
+      showToast(
+        `¡Grupo "${created.name}" creado! Compartí el código ${created.inviteCode}.`,
+      );
     } catch (err) {
-      setErrorMsg(err instanceof ApiError ? err.message : 'No se pudo crear el grupo.');
+      setErrorMsg(
+        err instanceof ApiError ? err.message : "No se pudo crear el grupo.",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -127,9 +134,11 @@ export function GroupsPage() {
     setSubmitting(true);
     setErrorMsg(null);
     try {
-      const { group, alreadyMember } = await joinGroupByCode(joinCodeInput.trim());
+      const { group, alreadyMember } = await joinGroupByCode(
+        joinCodeInput.trim(),
+      );
       setSelectedGroupId(group.id);
-      setJoinCodeInput('');
+      setJoinCodeInput("");
       setJoinModalOpen(false);
       showToast(
         alreadyMember
@@ -138,7 +147,9 @@ export function GroupsPage() {
       );
     } catch (err) {
       setErrorMsg(
-        err instanceof ApiError ? err.message : 'Código de invitación inválido.',
+        err instanceof ApiError
+          ? err.message
+          : "Código de invitación inválido.",
       );
     } finally {
       setSubmitting(false);
@@ -150,18 +161,24 @@ export function GroupsPage() {
     try {
       await fn();
     } catch (err) {
-      setErrorMsg(err instanceof ApiError ? err.message : 'No se pudo completar la acción.');
+      setErrorMsg(
+        err instanceof ApiError
+          ? err.message
+          : "No se pudo completar la acción.",
+      );
     }
   };
 
   const myMembership = selectedGroup?.members.find(
     (m) => m.user.id === currentUser.id,
   );
-  const isAdmin = myMembership?.role === 'admin';
+  const isAdmin = myMembership?.role === "admin";
   const groupSessionsCount = selectedGroup
     ? sessions.filter((s) => s.groupId === selectedGroup.id).length
     : 0;
-  const groupGamesCount = selectedGroup ? getGroupGameCount(selectedGroup.id) : 0;
+  const groupGamesCount = selectedGroup
+    ? getGroupGameCount(selectedGroup.id)
+    : 0;
 
   if (!authLoading && !isAuthenticated) {
     return (
@@ -173,9 +190,9 @@ export function GroupsPage() {
         lockTitle="Los grupos requieren una cuenta"
         lockDescription="En modo invitado no podés ver ni crear grupos. Iniciá sesión o registrate para armar tus mesas habituales y cruzar ludotecas con tus amigos."
         benefits={[
-          'Creá grupos privados y compartí links de invitación por WhatsApp.',
-          'Sumá las colecciones de todos los integrantes automáticamente.',
-          'Administrá miembros, roles y el grupo activo en cada juntada.',
+          "Creá grupos privados y compartí links de invitación por WhatsApp.",
+          "Sumá las colecciones de todos los integrantes automáticamente.",
+          "Administrá miembros, roles y el grupo activo en cada juntada.",
         ]}
       />
     );
@@ -193,8 +210,8 @@ export function GroupsPage() {
             Mis Grupos
           </h1>
           <p className="text-sm sm:text-base text-ink-muted max-w-xl">
-            Armá tus grupos de juego, compartí el código de invitación por WhatsApp y
-            cambiá de grupo activo cuando quieras.
+            Armá tus grupos de juego, compartí el código de invitación por
+            WhatsApp y cambiá de grupo activo cuando quieras.
           </p>
         </div>
 
@@ -231,7 +248,10 @@ export function GroupsPage() {
           role="status"
           className="flex items-center gap-2 rounded-2xl border border-forest-200 bg-forest-50 px-4 py-3 text-sm font-semibold text-forest-900"
         >
-          <Check className="h-4 w-4 shrink-0 text-forest-600" aria-hidden="true" />
+          <Check
+            className="h-4 w-4 shrink-0 text-forest-600"
+            aria-hidden="true"
+          />
           <span>{feedback}</span>
         </div>
       )}
@@ -247,10 +267,7 @@ export function GroupsPage() {
       )}
 
       {isBootstrapping ? (
-        <div className="flex items-center justify-center py-16 text-ink-muted gap-2">
-          <Loader2 className="h-5 w-5 animate-spin text-forest-600" aria-hidden="true" />
-          <span className="text-sm font-semibold">Cargando grupos…</span>
-        </div>
+        <PageLoadingSkeleton variant="groups" />
       ) : !selectedGroup ? (
         <div className="rounded-3xl border border-dashed border-border-strong bg-surface/80 px-6 py-14 text-center space-y-4">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-forest-50 text-forest-700">
@@ -261,8 +278,8 @@ export function GroupsPage() {
               Todavía no estás en ningún grupo
             </h2>
             <p className="text-sm text-ink-muted max-w-md mx-auto">
-              Creá tu primer grupo para invitar amigos con un código y cruzar sus ludotecas
-              de BGG en cada juntada.
+              Creá tu primer grupo para invitar amigos con un código y cruzar
+              sus ludotecas de BGG en cada juntada.
             </p>
           </div>
           <div className="flex flex-wrap justify-center gap-2.5 pt-1">
@@ -287,7 +304,10 @@ export function GroupsPage() {
       ) : (
         <div className="grid gap-5 lg:grid-cols-12 items-start">
           {/* Groups List */}
-          <section className="lg:col-span-5 space-y-3" aria-label="Lista de tus grupos">
+          <section
+            className="lg:col-span-5 space-y-3"
+            aria-label="Lista de tus grupos"
+          >
             <h2 className="text-xs font-extrabold uppercase tracking-wider text-ink-subtle">
               Tus grupos ({groups.length})
             </h2>
@@ -308,8 +328,8 @@ export function GroupsPage() {
                     onClick={() => setSelectedGroupId(group.id)}
                     className={`w-full rounded-2xl border p-4 text-left transition ${
                       isSelected
-                        ? 'border-forest-600 bg-surface shadow-[var(--shadow-card-hover)] ring-1 ring-forest-600/20'
-                        : 'border-border bg-surface/80 hover:border-border-strong hover:bg-surface'
+                        ? "border-forest-600 bg-surface shadow-[var(--shadow-card-hover)] ring-1 ring-forest-600/20"
+                        : "border-border bg-surface/80 hover:border-border-strong hover:bg-surface"
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2">
@@ -320,7 +340,7 @@ export function GroupsPage() {
                               Grupo activo
                             </span>
                           )}
-                          {myRole === 'admin' && (
+                          {myRole === "admin" && (
                             <span className="inline-flex items-center gap-1 rounded-full bg-ochre-50 border border-ochre-100 px-2 py-0.5 text-[10px] font-bold text-ochre-700">
                               Admin
                             </span>
@@ -343,9 +363,9 @@ export function GroupsPage() {
                         showNames={false}
                       />
                       <span className="text-xs font-semibold text-ink-muted num-tabular">
-                        {group.members.length}{' '}
-                        {group.members.length === 1 ? 'miembro' : 'miembros'} · {gamesCount}{' '}
-                        juegos
+                        {group.members.length}{" "}
+                        {group.members.length === 1 ? "miembro" : "miembros"} ·{" "}
+                        {gamesCount} juegos
                       </span>
                     </div>
                   </button>
@@ -380,7 +400,9 @@ export function GroupsPage() {
                   type="button"
                   onClick={() => {
                     setActiveGroupId(selectedGroup.id);
-                    showToast(`Cambiaste el grupo activo a "${selectedGroup.name}".`);
+                    showToast(
+                      `Cambiaste el grupo activo a "${selectedGroup.name}".`,
+                    );
                   }}
                   className="self-start inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-forest-600 px-4 text-xs font-bold text-white hover:bg-forest-700 transition"
                 >
@@ -392,7 +414,10 @@ export function GroupsPage() {
                   to="/sessions"
                   className="self-start inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-border bg-canvas px-3.5 text-xs font-bold text-ink hover:border-border-strong transition"
                 >
-                  <CalendarDays className="h-3.5 w-3.5 text-forest-600" aria-hidden="true" />
+                  <CalendarDays
+                    className="h-3.5 w-3.5 text-forest-600"
+                    aria-hidden="true"
+                  />
                   Ver sus juntadas
                 </Link>
               )}
@@ -437,8 +462,8 @@ export function GroupsPage() {
                     Invitar amigos al grupo
                   </h3>
                   <p className="text-xs text-forest-700">
-                    Quien ingrese con este código suma automáticamente su ludoteca de BGG al
-                    grupo.
+                    Quien ingrese con este código suma automáticamente su
+                    ludoteca de BGG al grupo.
                   </p>
                 </div>
                 {isAdmin && (
@@ -446,7 +471,9 @@ export function GroupsPage() {
                     type="button"
                     onClick={() =>
                       void handleSafeAction(async () => {
-                        const nextCode = await regenerateInviteCode(selectedGroup.id);
+                        const nextCode = await regenerateInviteCode(
+                          selectedGroup.id,
+                        );
                         showToast(`Código actualizado a ${nextCode}.`);
                       })
                     }
@@ -466,10 +493,10 @@ export function GroupsPage() {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => handleCopy('code')}
+                    onClick={() => handleCopy("code")}
                     className="flex-1 sm:flex-none inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl border border-forest-200 bg-surface px-3.5 text-xs font-bold text-forest-800 hover:bg-forest-50 transition"
                   >
-                    {copiedType === 'code' ? (
+                    {copiedType === "code" ? (
                       <>
                         <Check className="h-3.5 w-3.5" aria-hidden="true" />
                         Copiado
@@ -483,10 +510,10 @@ export function GroupsPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleCopy('link')}
+                    onClick={() => handleCopy("link")}
                     className="flex-1 sm:flex-none inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl bg-forest-600 px-3.5 text-xs font-bold text-white hover:bg-forest-700 transition"
                   >
-                    {copiedType === 'link' ? (
+                    {copiedType === "link" ? (
                       <>
                         <Check className="h-3.5 w-3.5" aria-hidden="true" />
                         Link copiado
@@ -509,7 +536,7 @@ export function GroupsPage() {
                   Miembros y aporte a la ludoteca
                 </h3>
                 <span className="text-[11px] text-ink-subtle">
-                  {isAdmin ? 'Podés gestionar roles' : 'Vista de miembro'}
+                  {isAdmin ? "Podés gestionar roles" : "Vista de miembro"}
                 </span>
               </div>
 
@@ -540,22 +567,33 @@ export function GroupsPage() {
                             </p>
                             <span
                               className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                                member.role === 'admin'
-                                  ? 'bg-ochre-50 text-ochre-700 border border-ochre-100'
-                                  : 'bg-canvas-deep text-ink-muted'
+                                member.role === "admin"
+                                  ? "bg-ochre-50 text-ochre-700 border border-ochre-100"
+                                  : "bg-canvas-deep text-ink-muted"
                               }`}
                             >
-                              {member.role === 'admin' ? (
-                                <ShieldCheck className="h-3 w-3" aria-hidden="true" />
+                              {member.role === "admin" ? (
+                                <ShieldCheck
+                                  className="h-3 w-3"
+                                  aria-hidden="true"
+                                />
                               ) : (
-                                <Shield className="h-3 w-3" aria-hidden="true" />
+                                <Shield
+                                  className="h-3 w-3"
+                                  aria-hidden="true"
+                                />
                               )}
-                              {member.role === 'admin' ? 'Admin' : 'Miembro'}
+                              {member.role === "admin" ? "Admin" : "Miembro"}
                             </span>
                           </div>
                           <p className="text-xs text-ink-subtle num-tabular">
-                            {member.user.bggUsername ? `@${member.user.bggUsername} · ` : ''}
-                            Aporta <strong className="text-ink-muted">{ownedCount}</strong>{' '}
+                            {member.user.bggUsername
+                              ? `@${member.user.bggUsername} · `
+                              : ""}
+                            Aporta{" "}
+                            <strong className="text-ink-muted">
+                              {ownedCount}
+                            </strong>{" "}
                             juegos
                           </p>
                         </div>
@@ -569,25 +607,36 @@ export function GroupsPage() {
                               type="button"
                               onClick={() =>
                                 void handleSafeAction(() =>
-                                  toggleMemberRole(selectedGroup.id, member.user.id),
+                                  toggleMemberRole(
+                                    selectedGroup.id,
+                                    member.user.id,
+                                  ),
                                 )
                               }
                               className="inline-flex min-h-8 items-center rounded-lg border border-border bg-surface px-2.5 text-[11px] font-bold text-ink-muted hover:border-border-strong hover:text-ink transition"
                             >
-                              {member.role === 'admin' ? 'Quitar admin' : 'Hacer admin'}
+                              {member.role === "admin"
+                                ? "Quitar admin"
+                                : "Hacer admin"}
                             </button>
                             <button
                               type="button"
                               onClick={() =>
                                 void handleSafeAction(() =>
-                                  removeGroupMember(selectedGroup.id, member.user.id),
+                                  removeGroupMember(
+                                    selectedGroup.id,
+                                    member.user.id,
+                                  ),
                                 )
                               }
                               aria-label={`Quitar a ${member.user.displayName}`}
                               title="Quitar del grupo"
                               className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-surface text-ink-subtle hover:border-terracotta-200 hover:bg-terracotta-50 hover:text-terracotta-600 transition"
                             >
-                              <UserMinus className="h-3.5 w-3.5" aria-hidden="true" />
+                              <UserMinus
+                                className="h-3.5 w-3.5"
+                                aria-hidden="true"
+                              />
                             </button>
                           </>
                         )}
@@ -597,8 +646,13 @@ export function GroupsPage() {
                             type="button"
                             onClick={() =>
                               void handleSafeAction(async () => {
-                                await removeGroupMember(selectedGroup.id, currentUser.id);
-                                showToast(`Saliste del grupo "${selectedGroup.name}".`);
+                                await removeGroupMember(
+                                  selectedGroup.id,
+                                  currentUser.id,
+                                );
+                                showToast(
+                                  `Saliste del grupo "${selectedGroup.name}".`,
+                                );
                               })
                             }
                             className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-border bg-surface px-2.5 text-[11px] font-bold text-terracotta-600 hover:bg-terracotta-50 transition"
@@ -683,7 +737,8 @@ export function GroupsPage() {
                 autoFocus
               />
               <p className="text-xs text-ink-subtle">
-                Generaremos un código único y un link de invitación apenas lo crees.
+                Generaremos un código único y un link de invitación apenas lo
+                crees.
               </p>
             </div>
 

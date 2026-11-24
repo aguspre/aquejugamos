@@ -2,6 +2,7 @@ import {
   GroupRole,
   Prisma,
   ProposalStatus,
+  RecurrenceFrequency,
   RsvpStatus,
   SessionStatus,
   UserGameStatus,
@@ -11,11 +12,17 @@ import { prisma } from '../../config/prisma.js';
 import { badRequest, conflict, forbidden, notFound } from '../../utils/errors.js';
 import { generateSessionInviteToken } from '../../utils/tokens.js';
 import { assertGroupMember } from '../groups/groups.service.js';
+import {
+  computeNextOccurrenceDate,
+  isOccurrencePastRollover,
+  SERIES_ROLLOVER_GRACE_MS,
+} from './sessions.recurrence.js';
 import type {
   CreateProposalInput,
   CreateSessionInput,
   ListSessionsQuery,
   SessionPoolQuery,
+  UpdateSeriesInput,
   UpdateSessionInput,
 } from './sessions.schemas.js';
 import {
@@ -201,6 +208,200 @@ export async function assertSessionAccess(
   };
 }
 
+const SERIES_SUMMARY_SELECT = {
+  id: true,
+  frequency: true,
+  shareToken: true,
+  isActive: true,
+} as const;
+
+/** El token fijo de la serie solo se expone a miembros activos del grupo (no a invitados ni ex-miembros). */
+function exposeSeriesSummary<T extends { shareToken: string }>(
+  series: T | null | undefined,
+  canSeeShareToken: boolean,
+): (Omit<T, 'shareToken'> & { shareToken: string | null }) | null {
+  if (!series) return null;
+  return { ...series, shareToken: canSeeShareToken ? series.shareToken : null };
+}
+
+const ACTIVE_SESSION_STATUSES: SessionStatus[] = [
+  SessionStatus.planning,
+  SessionStatus.voting,
+  SessionStatus.locked,
+];
+
+interface LockedSeriesRow {
+  id: string;
+  group_id: string;
+  host_id: string;
+  title: string;
+  location: string | null;
+  frequency: RecurrenceFrequency;
+  voting_mode: VotingMode;
+  max_votes_per_user: number;
+  max_proposals_per_user: number | null;
+  share_token: string;
+  is_active: boolean;
+}
+
+async function createNextOccurrenceInTx(
+  tx: Prisma.TransactionClient,
+  series: LockedSeriesRow,
+  anchorDate: Date,
+  now: Date,
+): Promise<string | null> {
+  const members = await tx.groupMember.findMany({
+    where: { groupId: series.group_id },
+    select: { userId: true, role: true },
+    orderBy: { joinedAt: 'asc' },
+  });
+
+  if (members.length === 0) {
+    return null;
+  }
+
+  const resolvedHostId = members.some((m) => m.userId === series.host_id)
+    ? series.host_id
+    : (members.find((m) => m.role === GroupRole.admin)?.userId ?? members[0]!.userId);
+
+  const nextScheduledAt = computeNextOccurrenceDate(anchorDate, series.frequency, now);
+  const created = await tx.session.create({
+    data: {
+      groupId: series.group_id,
+      seriesId: series.id,
+      hostId: resolvedHostId,
+      title: series.title,
+      scheduledAt: nextScheduledAt,
+      location: series.location,
+      status: SessionStatus.voting,
+      votingMode: series.voting_mode,
+      maxVotesPerUser: series.max_votes_per_user,
+      maxProposalsPerUser: series.max_proposals_per_user,
+      inviteToken: generateSessionInviteToken(),
+      participants: {
+        createMany: {
+          data: members.map((m) => ({
+            userId: m.userId,
+            rsvp: m.userId === resolvedHostId ? RsvpStatus.going : RsvpStatus.maybe,
+          })),
+          skipDuplicates: true,
+        },
+      },
+    },
+    select: { id: true },
+  });
+
+  return created.id;
+}
+
+export async function ensureActiveSeriesSession(
+  seriesId: string,
+  now: Date = new Date(),
+): Promise<{
+  series: {
+    id: string;
+    groupId: string;
+    frequency: RecurrenceFrequency;
+    shareToken: string;
+    isActive: boolean;
+  };
+  activeSessionId: string | null;
+  createdNew: boolean;
+} | null> {
+  return prisma.$transaction(
+    async (tx) => {
+      const rows = await tx.$queryRaw<LockedSeriesRow[]>`
+        SELECT
+          id,
+          group_id,
+          host_id,
+          title,
+          location,
+          frequency,
+          voting_mode,
+          max_votes_per_user,
+          max_proposals_per_user,
+          share_token,
+          is_active
+        FROM session_series
+        WHERE id = ${seriesId}::uuid
+        FOR UPDATE
+      `;
+
+      const series = rows[0];
+      if (!series) {
+        return null;
+      }
+
+      const summary = {
+        id: series.id,
+        groupId: series.group_id,
+        frequency: series.frequency,
+        shareToken: series.share_token,
+        isActive: series.is_active,
+      };
+
+      const activeOccurrences = await tx.session.findMany({
+        where: {
+          seriesId: series.id,
+          status: { in: ACTIVE_SESSION_STATUSES },
+        },
+        select: { id: true, scheduledAt: true },
+        orderBy: { scheduledAt: 'asc' },
+      });
+
+      const expired = activeOccurrences.filter((s) =>
+        isOccurrencePastRollover(s.scheduledAt, now),
+      );
+      const upcoming = activeOccurrences.filter(
+        (s) => !isOccurrencePastRollover(s.scheduledAt, now),
+      );
+
+      if (expired.length > 0) {
+        await tx.session.updateMany({
+          where: {
+            id: { in: expired.map((s) => s.id) },
+            status: { in: ACTIVE_SESSION_STATUSES },
+          },
+          data: { status: SessionStatus.completed },
+        });
+      }
+
+      if (upcoming.length > 0) {
+        return {
+          series: summary,
+          activeSessionId: upcoming[0]!.id,
+          createdNew: false,
+        };
+      }
+
+      const latestSession = await tx.session.findFirst({
+        where: { seriesId: series.id },
+        select: { id: true, scheduledAt: true },
+        orderBy: { scheduledAt: 'desc' },
+      });
+
+      if (!series.is_active) {
+        return {
+          series: summary,
+          activeSessionId: latestSession?.id ?? null,
+          createdNew: false,
+        };
+      }
+
+      const anchorDate = latestSession?.scheduledAt ?? now;
+      const createdId = await createNextOccurrenceInTx(tx, series, anchorDate, now);
+
+      return {
+        series: summary,
+        activeSessionId: createdId ?? latestSession?.id ?? null,
+        createdNew: Boolean(createdId),
+      };
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+  );
+}
+
 export async function listUserSessions(
   userId: string,
   query: ListSessionsQuery,
@@ -217,6 +418,30 @@ export async function listUserSessions(
   } else {
     if (query.groupId) {
       await assertGroupMember(userId, query.groupId);
+    }
+
+    // Roll over any active recurring series in the user's groups whose occurrence passed
+    const rolloverCutoff = new Date(Date.now() - SERIES_ROLLOVER_GRACE_MS);
+    const staleSeries = await prisma.sessionSeries.findMany({
+      where: {
+        isActive: true,
+        ...(query.groupId ? { groupId: query.groupId } : {}),
+        group: { members: { some: { userId } } },
+        NOT: {
+          sessions: {
+            some: {
+              status: { in: ACTIVE_SESSION_STATUSES },
+              scheduledAt: { gt: rolloverCutoff },
+            },
+          },
+        },
+      },
+      select: { id: true },
+      take: 10,
+    });
+
+    for (const s of staleSeries) {
+      await ensureActiveSeriesSession(s.id);
     }
 
     accessOr = [
@@ -243,6 +468,7 @@ export async function listUserSessions(
           },
         },
       },
+      series: { select: SERIES_SUMMARY_SELECT },
       host: { select: USER_SUMMARY_SELECT },
       participants: {
         include: { user: { select: USER_SUMMARY_SELECT } },
@@ -296,6 +522,10 @@ export async function listUserSessions(
       maxVotesPerUser: session.maxVotesPerUser,
       maxProposalsPerUser: session.maxProposalsPerUser,
       inviteToken: session.inviteToken,
+      series: exposeSeriesSummary(
+        session.series,
+        !scope?.isGuest && (session.group?.members.length ?? 0) > 0,
+      ),
       host: session.host,
       canManageSession:
         !scope?.isGuest &&
@@ -354,29 +584,287 @@ export async function createSession(userId: string, input: CreateSessionInput) {
         ? 3
         : input.maxVotesPerUser;
 
-  const created = await prisma.session.create({
-    data: {
-      groupId: input.groupId ?? null,
-      hostId: userId,
-      title: input.title,
-      scheduledAt: input.scheduledAt,
-      location: input.location ?? null,
-      status: input.status,
-      votingMode: input.votingMode,
-      maxVotesPerUser: normalizedMaxVotes,
-      maxProposalsPerUser: input.maxProposalsPerUser ?? null,
-      inviteToken: generateSessionInviteToken(),
-      participants: {
-        createMany: {
-          data: participantCreates,
-          skipDuplicates: true,
+  const createdSessionId = await prisma.$transaction(async (tx) => {
+    let seriesId: string | null = null;
+
+    if (input.recurrenceFrequency && input.groupId) {
+      const series = await tx.sessionSeries.create({
+        data: {
+          groupId: input.groupId,
+          hostId: userId,
+          title: input.title,
+          location: input.location ?? null,
+          frequency: input.recurrenceFrequency,
+          votingMode: input.votingMode,
+          maxVotesPerUser: normalizedMaxVotes,
+          maxProposalsPerUser: input.maxProposalsPerUser ?? null,
+          shareToken: generateSessionInviteToken(),
+          isActive: true,
+        },
+        select: { id: true },
+      });
+      seriesId = series.id;
+    }
+
+    const created = await tx.session.create({
+      data: {
+        groupId: input.groupId ?? null,
+        seriesId,
+        hostId: userId,
+        title: input.title,
+        scheduledAt: input.scheduledAt,
+        location: input.location ?? null,
+        status: input.status,
+        votingMode: input.votingMode,
+        maxVotesPerUser: normalizedMaxVotes,
+        maxProposalsPerUser: input.maxProposalsPerUser ?? null,
+        inviteToken: generateSessionInviteToken(),
+        participants: {
+          createMany: {
+            data: participantCreates,
+            skipDuplicates: true,
+          },
         },
       },
-    },
-    select: { id: true },
+      select: { id: true },
+    });
+
+    return created.id;
   });
 
-  return getSessionDetail(userId, created.id);
+  return getSessionDetail(userId, createdSessionId);
+}
+
+export async function joinSeriesByShareToken(
+  userId: string,
+  shareToken: string,
+  rsvp: RsvpStatus,
+) {
+  const series = await prisma.sessionSeries.findUnique({
+    where: { shareToken },
+    select: { id: true, groupId: true, isActive: true },
+  });
+
+  if (!series) {
+    throw notFound(
+      'Link de juntada recurrente inválido o inexistente',
+      'SERIES_NOT_FOUND',
+    );
+  }
+
+  const joinerMembership = await prisma.groupMember.findUnique({
+    where: { groupId_userId: { groupId: series.groupId, userId } },
+    select: { role: true },
+  });
+
+  if (!series.isActive && !joinerMembership) {
+    throw badRequest(
+      'Esta juntada recurrente está pausada y no admite nuevos ingresos',
+      undefined,
+      'SERIES_PAUSED',
+    );
+  }
+
+  const ensured = await ensureActiveSeriesSession(series.id);
+  if (!ensured?.activeSessionId) {
+    throw notFound(
+      'No hay ninguna juntada disponible en esta serie',
+      'SESSION_NOT_FOUND',
+    );
+  }
+
+  const activeSession = await prisma.session.findUnique({
+    where: { id: ensured.activeSessionId },
+    select: { id: true, status: true },
+  });
+
+  if (!activeSession) {
+    throw notFound('Juntada no encontrada', 'SESSION_NOT_FOUND');
+  }
+
+  const isClosed =
+    activeSession.status === SessionStatus.cancelled ||
+    activeSession.status === SessionStatus.completed;
+
+  if (!isClosed) {
+    await prisma.sessionParticipant.upsert({
+      where: {
+        sessionId_userId: { sessionId: activeSession.id, userId },
+      },
+      update: {
+        rsvp,
+        respondedAt: new Date(),
+      },
+      create: {
+        sessionId: activeSession.id,
+        userId,
+        rsvp,
+      },
+    });
+  } else {
+    // If paused & closed, allow group members to view the last archived occurrence
+    const membership = await prisma.groupMember.findUnique({
+      where: { groupId_userId: { groupId: series.groupId, userId } },
+      select: { role: true },
+    });
+    if (!membership) {
+      throw badRequest(
+        'Esta juntada recurrente está pausada y no tiene próximas fechas abiertas',
+        undefined,
+        'SERIES_PAUSED',
+      );
+    }
+  }
+
+  return getSessionDetail(userId, activeSession.id);
+}
+
+export async function advanceSeriesToNextOccurrence(
+  userId: string,
+  seriesId: string,
+) {
+  const nextSessionId = await prisma.$transaction(
+    async (tx) => {
+      const rows = await tx.$queryRaw<LockedSeriesRow[]>`
+        SELECT
+          id,
+          group_id,
+          host_id,
+          title,
+          location,
+          frequency,
+          voting_mode,
+          max_votes_per_user,
+          max_proposals_per_user,
+          share_token,
+          is_active
+        FROM session_series
+        WHERE id = ${seriesId}::uuid
+        FOR UPDATE
+      `;
+
+      const series = rows[0];
+      if (!series) {
+        throw notFound('Serie recurrente no encontrada', 'SERIES_NOT_FOUND');
+      }
+
+      const membership = await tx.groupMember.findUnique({
+        where: { groupId_userId: { groupId: series.group_id, userId } },
+        select: { role: true },
+      });
+
+      const isActiveHost = series.host_id === userId && Boolean(membership);
+      const isGroupAdmin = membership?.role === GroupRole.admin;
+      if (!isActiveHost && !isGroupAdmin) {
+        throw forbidden(
+          'Solo el anfitrión o un administrador del grupo puede avanzar la serie recurrente',
+          'SESSION_HOST_REQUIRED',
+        );
+      }
+
+      if (!series.is_active) {
+        throw badRequest(
+          'La recurrencia está pausada. Reactivala para generar la próxima fecha.',
+          undefined,
+          'SERIES_PAUSED',
+        );
+      }
+
+      const latest = await tx.session.findFirst({
+        where: { seriesId: series.id },
+        select: { scheduledAt: true },
+        orderBy: { scheduledAt: 'desc' },
+      });
+
+      await tx.session.updateMany({
+        where: {
+          seriesId: series.id,
+          status: { in: ACTIVE_SESSION_STATUSES },
+        },
+        data: { status: SessionStatus.completed },
+      });
+
+      const now = new Date();
+      const createdId = await createNextOccurrenceInTx(
+        tx,
+        series,
+        latest?.scheduledAt ?? now,
+        now,
+      );
+
+      if (!createdId) {
+        throw badRequest(
+          'El grupo no tiene miembros activos para generar la próxima juntada',
+          undefined,
+          'GROUP_HAS_NO_MEMBERS',
+        );
+      }
+
+      return createdId;
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+  );
+
+  return getSessionDetail(userId, nextSessionId);
+}
+
+export async function updateSessionSeries(
+  userId: string,
+  seriesId: string,
+  input: UpdateSeriesInput,
+) {
+  const updatedSeries = await prisma.$transaction(
+    async (tx) => {
+      const rows = await tx.$queryRaw<
+        { id: string; group_id: string; host_id: string; is_active: boolean }[]
+      >`
+        SELECT id, group_id, host_id, is_active
+        FROM session_series
+        WHERE id = ${seriesId}::uuid
+        FOR UPDATE
+      `;
+
+      const series = rows[0];
+      if (!series) {
+        throw notFound('Serie recurrente no encontrada', 'SERIES_NOT_FOUND');
+      }
+
+      const membership = await tx.groupMember.findUnique({
+        where: { groupId_userId: { groupId: series.group_id, userId } },
+        select: { role: true },
+      });
+
+      const isActiveHost = series.host_id === userId && Boolean(membership);
+      const isGroupAdmin = membership?.role === GroupRole.admin;
+      if (!isActiveHost && !isGroupAdmin) {
+        throw forbidden(
+          'Solo el anfitrión o un administrador del grupo puede modificar la recurrencia',
+          'SESSION_HOST_REQUIRED',
+        );
+      }
+
+      return tx.sessionSeries.update({
+        where: { id: seriesId },
+        data: {
+          ...(input.frequency !== undefined ? { frequency: input.frequency } : {}),
+          ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
+        },
+        select: SERIES_SUMMARY_SELECT,
+      });
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+  );
+
+  let activeSessionId: string | null = null;
+  if (updatedSeries.isActive) {
+    const ensured = await ensureActiveSeriesSession(updatedSeries.id);
+    activeSessionId = ensured?.activeSessionId ?? null;
+  }
+
+  return {
+    series: updatedSeries,
+    activeSessionId,
+  };
 }
 
 export async function joinSessionByInviteToken(
@@ -436,6 +924,7 @@ export async function getSessionDetail(
           },
         },
       },
+      series: { select: SERIES_SUMMARY_SELECT },
       host: { select: USER_SUMMARY_SELECT },
       participants: {
         include: { user: { select: USER_SUMMARY_SELECT } },
@@ -479,9 +968,20 @@ export async function getSessionDetail(
   const allParticipantIds = session.participants.map((p) => p.userId);
   const proposalGameIds = session.proposals.map((p) => p.gameId);
 
-  const ownedRows =
+  const canViewAllSeriesHistory =
+    isGroupMember ||
+    Boolean(
+      scope?.isGuest &&
+        scope.guestGroupId &&
+        session.groupId === scope.guestGroupId,
+    );
+  const canQuerySeriesHistory = Boolean(
+    session.seriesId && (canViewAllSeriesHistory || !scope?.isGuest),
+  );
+
+  const [ownedRows, siblingOccurrences] = await Promise.all([
     proposalGameIds.length > 0 && allParticipantIds.length > 0
-      ? await prisma.userGame.findMany({
+      ? prisma.userGame.findMany({
           where: {
             gameId: { in: proposalGameIds },
             userId: { in: allParticipantIds },
@@ -489,7 +989,39 @@ export async function getSessionDetail(
           },
           include: { user: { select: USER_SUMMARY_SELECT } },
         })
-      : [];
+      : Promise.resolve([]),
+    canQuerySeriesHistory && session.seriesId
+      ? prisma.session.findMany({
+          where: canViewAllSeriesHistory
+            ? {
+                seriesId: session.seriesId,
+                id: { not: session.id },
+              }
+            : {
+                seriesId: session.seriesId,
+                id: { not: session.id },
+                participants: { some: { userId } },
+              },
+          select: {
+            id: true,
+            title: true,
+            scheduledAt: true,
+            status: true,
+            participants: {
+              where: { rsvp: RsvpStatus.going },
+              select: { userId: true },
+            },
+            proposals: {
+              where: { status: ProposalStatus.accepted },
+              select: { game: { select: { name: true } } },
+              orderBy: { acceptedAt: 'asc' },
+            },
+          },
+          orderBy: { scheduledAt: 'desc' },
+          take: 20,
+        })
+      : Promise.resolve([]),
+  ]);
 
   const goingIdSet = new Set(goingIds);
   const ownersByGame = new Map<string, OwnerSummary[]>();
@@ -559,6 +1091,15 @@ export async function getSessionDetail(
     userProposalsCount: proposalQuota.userProposalsCount,
     proposalsRemaining: proposalQuota.proposalsRemaining,
     inviteToken: session.inviteToken,
+    series: exposeSeriesSummary(session.series, !scope?.isGuest && isGroupMember),
+    seriesHistory: siblingOccurrences.map((occ) => ({
+      id: occ.id,
+      title: occ.title,
+      scheduledAt: occ.scheduledAt,
+      status: occ.status,
+      confirmedCount: occ.participants.length,
+      acceptedGames: occ.proposals.map((p) => p.game.name),
+    })),
     host: session.host,
     canManageSession: !scope?.isGuest && (isHost || isGroupAdmin),
     confirmedCount: goingIds.length,
@@ -599,9 +1140,15 @@ async function lockAndAssertSessionManager(
   forbiddenMessage: string,
 ) {
   const sessionRows = await tx.$queryRaw<
-    { id: string; group_id: string | null; host_id: string; status: SessionStatus }[]
+    {
+      id: string;
+      group_id: string | null;
+      series_id: string | null;
+      host_id: string;
+      status: SessionStatus;
+    }[]
   >`
-    SELECT id, group_id, host_id, status
+    SELECT id, group_id, series_id, host_id, status
     FROM sessions
     WHERE id = ${sessionId}::uuid
     FOR UPDATE
@@ -670,6 +1217,25 @@ export async function updateSession(
             : {}),
         },
       });
+
+      // Keep recurring series template in sync when editing an active occurrence
+      if (
+        lockedSession.series_id &&
+        (input.title !== undefined ||
+          input.location !== undefined ||
+          input.maxProposalsPerUser !== undefined)
+      ) {
+        await tx.sessionSeries.update({
+          where: { id: lockedSession.series_id },
+          data: {
+            ...(input.title !== undefined ? { title: input.title } : {}),
+            ...(input.location !== undefined ? { location: input.location } : {}),
+            ...(input.maxProposalsPerUser !== undefined
+              ? { maxProposalsPerUser: input.maxProposalsPerUser }
+              : {}),
+          },
+        });
+      }
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
   );
