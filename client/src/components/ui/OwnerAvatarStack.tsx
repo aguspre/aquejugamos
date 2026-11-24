@@ -1,4 +1,5 @@
 import type { UserSummary } from '../../types/domain';
+import { UserAvatar } from './UserAvatar';
 
 interface OwnerAvatarStackProps {
   owners: UserSummary[];
@@ -38,22 +39,12 @@ export function OwnerAvatarStack({
     <div className="flex items-center gap-2 min-w-0">
       <div className="flex -space-x-2 shrink-0" aria-hidden="true">
         {visible.map((owner) => (
-          <span
+          <UserAvatar
             key={owner.id}
-            className={`inline-flex items-center justify-center rounded-full font-bold text-white ring-2 ring-surface shadow-xs select-none ${avatarSize}`}
-            style={{ backgroundColor: owner.accentColor }}
+            user={owner}
+            className={`ring-2 ring-surface shadow-xs ${avatarSize}`}
             title={owner.displayName}
-          >
-            {owner.avatarUrl ? (
-              <img
-                src={owner.avatarUrl}
-                alt={owner.displayName}
-                className="h-full w-full rounded-full object-cover"
-              />
-            ) : (
-              owner.initials
-            )}
-          </span>
+          />
         ))}
         {overflow > 0 && (
           <span

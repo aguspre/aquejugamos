@@ -17,6 +17,7 @@ import { Link } from 'react-router-dom';
 import { mapUserSummary } from '../api/mappers';
 import { GuestLockedView } from '../components/auth/GuestLockedView';
 import { OwnerAvatarStack } from '../components/ui/OwnerAvatarStack';
+import { UserAvatar } from '../components/ui/UserAvatar';
 import { useAppState } from '../context/AppStateContext';
 import { useAuth } from '../context/AuthContext';
 import type { Game } from '../types/domain';
@@ -212,12 +213,10 @@ export function HistoryPage() {
                           <span className="w-4 text-center text-xs font-extrabold text-ink-subtle num-tabular">
                             {idx + 1}
                           </span>
-                          <span
-                            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
-                            style={{ backgroundColor: mappedUser.accentColor }}
-                          >
-                            {mappedUser.initials}
-                          </span>
+                          <UserAvatar
+                            user={mappedUser}
+                            className="h-7 w-7 text-[11px]"
+                          />
                           <div className="min-w-0">
                             <p className="text-xs font-bold text-ink truncate">
                               {mappedUser.displayName}
@@ -418,12 +417,10 @@ export function HistoryPage() {
                                   : 'border-border bg-canvas/60 text-ink-muted'
                               }`}
                             >
-                              <span
-                                className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-bold text-white"
-                                style={{ backgroundColor: entry.user.accentColor }}
-                              >
-                                {entry.user.initials}
-                              </span>
+                              <UserAvatar
+                                user={entry.user}
+                                className="h-5 w-5 text-[9px]"
+                              />
                               <span>{entry.user.displayName}</span>
                               {entry.score !== undefined && (
                                 <span className="rounded-md bg-surface px-1.5 py-0.5 text-[11px] font-extrabold text-ink num-tabular border border-border/70">
