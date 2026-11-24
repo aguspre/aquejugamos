@@ -4,6 +4,7 @@ import type {
   Group,
   LibraryGameItem,
   PlayLog,
+  ProposalStatus,
   RsvpStatus,
   SessionGameItem,
   SessionProposal,
@@ -116,9 +117,27 @@ export interface ApiSessionListItem {
   host: ApiUserSummary;
   confirmedCount: number;
   proposalsCount: number;
+  acceptedProposals?: {
+    id: string;
+    acceptedAt: string | null;
+    game: {
+      id: string;
+      name: string;
+      thumbnailUrl: string | null;
+      playingTimeMinutes?: number | null;
+    };
+    voteCount: number;
+    score: number;
+  }[];
   topProposal: {
     id: string;
-    game: { id: string; name: string; thumbnailUrl: string | null };
+    status?: ProposalStatus;
+    game: {
+      id: string;
+      name: string;
+      thumbnailUrl: string | null;
+      playingTimeMinutes?: number | null;
+    };
     voteCount: number;
     score: number;
   } | null;
@@ -141,9 +160,12 @@ export interface ApiSessionDetail {
   maxVotesPerUser: number;
   inviteToken: string;
   host: ApiUserSummary;
+  canManageSession?: boolean;
   confirmedCount: number;
   userVotesUsed: number;
   votesRemaining: number;
+  lockedVotesCount?: number;
+  lockedRanks?: number[];
   participants: {
     rsvp: RsvpStatus;
     respondedAt: string;
@@ -152,6 +174,9 @@ export interface ApiSessionDetail {
   proposals: {
     id: string;
     note: string | null;
+    status: ProposalStatus;
+    acceptedAt: string | null;
+    acceptedBy: ApiUserSummary | null;
     createdAt: string;
     game: ApiGame;
     proposedBy: ApiUserSummary;
@@ -166,6 +191,7 @@ export interface ApiSessionDetail {
 export interface ApiPoolGame extends ApiGame {
   owners: ApiUserSummary[];
   isProposed: boolean;
+  proposalStatus?: ProposalStatus | null;
 }
 
 export interface ApiPlayLog {
@@ -324,6 +350,9 @@ export function mapSessionDetail(detail: ApiSessionDetail): GameSession {
     owners: p.owners.map(mapUserSummary),
     proposedBy: mapUserSummary(p.proposedBy),
     note: p.note ?? undefined,
+    status: p.status ?? 'open',
+    acceptedAt: p.acceptedAt ?? undefined,
+    acceptedBy: p.acceptedBy ? mapUserSummary(p.acceptedBy) : undefined,
     voteCount: p.voteCount,
     score: p.score,
     userVoted: p.userVoted,
@@ -338,9 +367,12 @@ export function mapSessionDetail(detail: ApiSessionDetail): GameSession {
     scheduledAt: detail.scheduledAt,
     location: detail.location ?? 'Lugar a confirmar',
     host: mapUserSummary(detail.host),
+    canManageSession: detail.canManageSession,
     status: detail.status,
     votingMode: detail.votingMode,
     maxVotesPerUser: detail.maxVotesPerUser,
+    lockedVotesCount: detail.lockedVotesCount,
+    lockedRanks: detail.lockedRanks,
     inviteToken: detail.inviteToken,
     participants: detail.participants.map((p) => ({
       rsvp: p.rsvp,
@@ -351,38 +383,66 @@ export function mapSessionDetail(detail: ApiSessionDetail): GameSession {
 }
 
 export function mapSessionListItem(item: ApiSessionListItem): GameSession {
-  const fallbackProposals: SessionProposal[] = item.topProposal
-    ? [
-        {
-          id: item.topProposal.id,
-          game: {
-            id: item.topProposal.game.id,
-            bggId: 0,
-            name: item.topProposal.game.name,
-            yearPublished: 0,
-            imageUrl:
-              item.topProposal.game.thumbnailUrl ??
-              buildFallbackCover(item.topProposal.game.name),
-            thumbnailUrl:
-              item.topProposal.game.thumbnailUrl ??
-              buildFallbackCover(item.topProposal.game.name),
-            minPlayers: 1,
-            maxPlayers: 4,
-            bestPlayers: [],
-            playingTimeMinutes: 45,
-            weight: 0,
-            bggRating: 0,
-            isExpansion: false,
-            mechanics: [],
-          },
-          owners: [],
-          proposedBy: mapUserSummary(item.host),
-          voteCount: item.topProposal.voteCount,
-          score: item.topProposal.score,
-          userVoted: false,
-        },
-      ]
-    : [];
+  const mappedHost = mapUserSummary(item.host);
+  const toSummaryProposal = (
+    raw: {
+      id: string;
+      status: ProposalStatus;
+      acceptedAt?: string | null;
+      game: {
+        id: string;
+        name: string;
+        thumbnailUrl: string | null;
+        playingTimeMinutes?: number | null;
+      };
+      voteCount: number;
+      score: number;
+    },
+  ): SessionProposal => ({
+    id: raw.id,
+    game: {
+      id: raw.game.id,
+      bggId: 0,
+      name: raw.game.name,
+      yearPublished: 0,
+      imageUrl: raw.game.thumbnailUrl ?? buildFallbackCover(raw.game.name),
+      thumbnailUrl: raw.game.thumbnailUrl ?? buildFallbackCover(raw.game.name),
+      minPlayers: 1,
+      maxPlayers: 4,
+      bestPlayers: [],
+      playingTimeMinutes: raw.game.playingTimeMinutes ?? 45,
+      weight: 0,
+      bggRating: 0,
+      isExpansion: false,
+      mechanics: [],
+    },
+    owners: [],
+    proposedBy: mappedHost,
+    status: raw.status,
+    acceptedAt: raw.acceptedAt ?? undefined,
+    voteCount: raw.voteCount,
+    score: raw.score,
+    userVoted: false,
+  });
+
+  const summaryProposals: SessionProposal[] = (item.acceptedProposals ?? []).map((p) =>
+    toSummaryProposal({
+      ...p,
+      status: 'accepted',
+    }),
+  );
+
+  if (
+    item.topProposal &&
+    !summaryProposals.some((p) => p.id === item.topProposal!.id)
+  ) {
+    summaryProposals.push(
+      toSummaryProposal({
+        ...item.topProposal,
+        status: item.topProposal.status ?? 'open',
+      }),
+    );
+  }
 
   return {
     id: item.id,
@@ -391,7 +451,7 @@ export function mapSessionListItem(item: ApiSessionListItem): GameSession {
     title: item.title,
     scheduledAt: item.scheduledAt,
     location: item.location ?? 'Lugar a confirmar',
-    host: mapUserSummary(item.host),
+    host: mappedHost,
     status: item.status,
     votingMode: item.votingMode,
     maxVotesPerUser: item.maxVotesPerUser,
@@ -400,7 +460,7 @@ export function mapSessionListItem(item: ApiSessionListItem): GameSession {
       rsvp: p.rsvp,
       user: mapUserSummary(p.user),
     })),
-    proposals: fallbackProposals,
+    proposals: summaryProposals,
   };
 }
 
@@ -409,6 +469,7 @@ export function mapPoolGame(item: ApiPoolGame): SessionGameItem {
     ...mapGame(item),
     owners: item.owners.map(mapUserSummary),
     isProposed: item.isProposed,
+    proposalStatus: item.proposalStatus ?? (item.isProposed ? 'open' : null),
   };
 }
 

@@ -1,4 +1,4 @@
-import { VotingMode } from '@prisma/client';
+import { ProposalStatus, VotingMode } from '@prisma/client';
 import { describe, expect, it } from 'vitest';
 import {
   generateGroupInviteCode,
@@ -6,7 +6,9 @@ import {
 } from '../../../utils/tokens.js';
 import {
   aggregateCombinedPool,
+  computeUserVoteQuota,
   scoreProposalVotes,
+  sortAcceptedProposals,
   sortScoredProposals,
   type OwnerSummary,
   type PoolGameInput,
@@ -95,6 +97,75 @@ describe('Session voting scoring', () => {
 
     expect(sorted.map((p) => p.id)).toEqual(['p-3', 'p-2', 'p-1']);
   });
+
+  it('ordena propuestas aceptadas por orden de aceptación (acceptedAt ascendente)', () => {
+    const sorted = sortAcceptedProposals([
+      {
+        id: 'p-second',
+        createdAt: new Date('2026-11-23T09:00:00Z'),
+        acceptedAt: new Date('2026-11-23T12:00:00Z'),
+      },
+      {
+        id: 'p-first',
+        createdAt: new Date('2026-11-23T10:00:00Z'),
+        acceptedAt: new Date('2026-11-23T11:00:00Z'),
+      },
+    ]);
+
+    expect(sorted.map((p) => p.id)).toEqual(['p-first', 'p-second']);
+  });
+
+  it('mantiene consumido el cupo de votos en juegos aceptados en multi_vote, single_choice y ranked_top3', () => {
+    const multiQuota = computeUserVoteQuota(
+      [
+        { status: ProposalStatus.accepted, userVoted: true, userRank: 1 },
+        { status: ProposalStatus.open, userVoted: true, userRank: 1 },
+        { status: ProposalStatus.open, userVoted: false, userRank: null },
+      ],
+      VotingMode.multi_vote,
+      3,
+    );
+
+    expect(multiQuota).toEqual({
+      userVotesUsed: 2,
+      votesRemaining: 1,
+      lockedVotesCount: 1,
+      lockedRanks: [1],
+    });
+
+    const singleQuota = computeUserVoteQuota(
+      [
+        { status: ProposalStatus.accepted, userVoted: true, userRank: 1 },
+        { status: ProposalStatus.open, userVoted: false, userRank: null },
+      ],
+      VotingMode.single_choice,
+      1,
+    );
+
+    expect(singleQuota).toEqual({
+      userVotesUsed: 1,
+      votesRemaining: 0,
+      lockedVotesCount: 1,
+      lockedRanks: [1],
+    });
+
+    const rankedQuota = computeUserVoteQuota(
+      [
+        { status: ProposalStatus.accepted, userVoted: true, userRank: 1 },
+        { status: ProposalStatus.open, userVoted: true, userRank: 2 },
+        { status: ProposalStatus.open, userVoted: false, userRank: null },
+      ],
+      VotingMode.ranked_top3,
+      3,
+    );
+
+    expect(rankedQuota).toEqual({
+      userVotesUsed: 2,
+      votesRemaining: 1,
+      lockedVotesCount: 1,
+      lockedRanks: [1],
+    });
+  });
 });
 
 describe('Combined session pool aggregation', () => {
@@ -147,7 +218,7 @@ describe('Combined session pool aggregation', () => {
         { user: AGUS, game: heat },
         { user: AGUS, game: brass },
       ],
-      new Set(['g-heat']),
+      new Map<string, ProposalStatus>([['g-heat', ProposalStatus.accepted]]),
       {
         confirmedCount: 5,
         onlyCompatible: true,
@@ -158,7 +229,9 @@ describe('Combined session pool aggregation', () => {
     // Brass (max 4) y Wingspan: Europa (expansión) quedan filtrados; Heat primero por bestPlayers=[5,6]
     expect(pool.map((g) => g.id)).toEqual(['g-heat', 'g-wingspan']);
     expect(pool[0]!.isProposed).toBe(true);
+    expect(pool[0]!.proposalStatus).toBe(ProposalStatus.accepted);
     expect(pool[1]!.isProposed).toBe(false);
+    expect(pool[1]!.proposalStatus).toBeNull();
     expect(pool[1]!.owners.map((o) => o.displayName)).toEqual(['Agustín', 'Lucas']);
   });
 });

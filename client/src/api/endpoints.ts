@@ -1,5 +1,6 @@
 import type {
   GroupRole,
+  ProposalStatus,
   RsvpStatus,
   SessionStatus,
   UserGameStatus,
@@ -314,6 +315,19 @@ export const sessionsApi = {
       method: 'POST',
       body: { gameId, note: note?.trim() || null },
     }),
+
+  updateProposalStatus: (
+    sessionId: string,
+    proposalId: string,
+    status: ProposalStatus,
+  ) =>
+    apiRequest<{ session: ApiSessionDetail }>(
+      `/api/sessions/${sessionId}/proposals/${proposalId}/status`,
+      {
+        method: 'PATCH',
+        body: { status },
+      },
+    ),
 
   removeProposal: (sessionId: string, proposalId: string) =>
     apiRequest<{ session: ApiSessionDetail }>(

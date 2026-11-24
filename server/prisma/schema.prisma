@@ -43,6 +43,11 @@ enum RsvpStatus {
   not_going
 }
 
+enum ProposalStatus {
+  open
+  accepted
+}
+
 // ============================================================================
 // 1. Usuarios
 // ============================================================================
@@ -66,6 +71,7 @@ model User {
   hostedSessions        Session[]            @relation("SessionHost")
   sessionParticipations SessionParticipant[]
   proposals             SessionProposal[]    @relation("ProposalAuthor")
+  acceptedProposals     SessionProposal[]    @relation("ProposalAccepter")
   votes                 SessionVote[]
   createdPlayLogs       PlayLog[]            @relation("PlayLogCreator")
   playLogEntries        PlayLogPlayer[]
@@ -239,20 +245,25 @@ model SessionParticipant {
 // ============================================================================
 
 model SessionProposal {
-  id         String   @id @default(uuid()) @db.Uuid
-  sessionId  String   @map("session_id") @db.Uuid
-  gameId     String   @map("game_id") @db.Uuid
-  proposedBy String   @map("proposed_by") @db.Uuid
-  note       String?  @db.Text
-  createdAt  DateTime @default(now()) @map("created_at")
+  id         String         @id @default(uuid()) @db.Uuid
+  sessionId  String         @map("session_id") @db.Uuid
+  gameId     String         @map("game_id") @db.Uuid
+  proposedBy String         @map("proposed_by") @db.Uuid
+  note       String?        @db.Text
+  status     ProposalStatus @default(open)
+  acceptedAt DateTime?      @map("accepted_at")
+  acceptedBy String?        @map("accepted_by") @db.Uuid
+  createdAt  DateTime       @default(now()) @map("created_at")
 
   session  Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   game     Game          @relation(fields: [gameId], references: [id], onDelete: Cascade)
   proposer User          @relation("ProposalAuthor", fields: [proposedBy], references: [id], onDelete: Cascade)
+  accepter User?         @relation("ProposalAccepter", fields: [acceptedBy], references: [id], onDelete: SetNull)
   votes    SessionVote[]
 
   @@unique([sessionId, gameId])
   @@index([sessionId])
+  @@index([sessionId, status])
   @@index([gameId])
   @@map("session_proposals")
 }

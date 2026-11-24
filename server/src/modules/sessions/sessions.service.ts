@@ -1,6 +1,7 @@
 import {
   GroupRole,
   Prisma,
+  ProposalStatus,
   RsvpStatus,
   SessionStatus,
   UserGameStatus,
@@ -18,7 +19,9 @@ import type {
 } from './sessions.schemas.js';
 import {
   aggregateCombinedPool,
+  computeUserVoteQuota,
   scoreProposalVotes,
+  sortAcceptedProposals,
   sortScoredProposals,
   type OwnerSummary,
   type PoolGameInput,
@@ -174,7 +177,14 @@ export async function listUserSessions(
       },
       proposals: {
         include: {
-          game: { select: { id: true, name: true, thumbnailUrl: true } },
+          game: {
+            select: {
+              id: true,
+              name: true,
+              thumbnailUrl: true,
+              playingTimeMinutes: true,
+            },
+          },
           votes: { select: { userId: true, rank: true } },
         },
       },
@@ -183,16 +193,23 @@ export async function listUserSessions(
   });
 
   return sessions.map((session) => {
-    const scoredProposals = sortScoredProposals(
-      session.proposals.map((p) => ({
-        id: p.id,
-        createdAt: p.createdAt,
-        game: p.game,
-        ...scoreProposalVotes(p.votes, session.votingMode, userId),
-      })),
+    const scoredAll = session.proposals.map((p) => ({
+      id: p.id,
+      status: p.status,
+      acceptedAt: p.acceptedAt,
+      createdAt: p.createdAt,
+      game: p.game,
+      ...scoreProposalVotes(p.votes, session.votingMode, userId),
+    }));
+
+    const acceptedProposals = sortAcceptedProposals(
+      scoredAll.filter((p) => p.status === ProposalStatus.accepted),
+    );
+    const openProposals = sortScoredProposals(
+      scoredAll.filter((p) => p.status === ProposalStatus.open),
     );
 
-    const top = scoredProposals[0] ?? null;
+    const top = openProposals[0] ?? acceptedProposals[0] ?? null;
 
     return {
       id: session.id,
@@ -209,9 +226,17 @@ export async function listUserSessions(
       confirmedCount: session.participants.filter((p) => p.rsvp === RsvpStatus.going)
         .length,
       proposalsCount: session.proposals.length,
+      acceptedProposals: acceptedProposals.map((p) => ({
+        id: p.id,
+        acceptedAt: p.acceptedAt,
+        game: p.game,
+        voteCount: p.voteCount,
+        score: p.score,
+      })),
       topProposal: top
         ? {
             id: top.id,
+            status: top.status,
             game: top.game,
             voteCount: top.voteCount,
             score: top.score,
@@ -318,7 +343,7 @@ export async function getSessionDetail(
   sessionId: string,
   scope?: SessionAccessScope,
 ) {
-  await assertSessionAccess(userId, sessionId, scope);
+  const { isHost, isGroupAdmin } = await assertSessionAccess(userId, sessionId, scope);
 
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
@@ -333,6 +358,7 @@ export async function getSessionDetail(
         include: {
           game: { include: GAME_WITH_MECHANICS_INCLUDE },
           proposer: { select: USER_SUMMARY_SELECT },
+          accepter: { select: USER_SUMMARY_SELECT },
           votes: { select: { userId: true, rank: true } },
         },
       },
@@ -377,25 +403,38 @@ export async function getSessionDetail(
     }
   }
 
-  const scoredProposals = sortScoredProposals(
-    session.proposals.map((p) => {
-      const voteMetrics = scoreProposalVotes(p.votes, session.votingMode, userId);
-      const owners =
-        ownersByGame.get(p.gameId) ?? fallbackOwnersByGame.get(p.gameId) ?? [];
+  const mappedProposals = session.proposals.map((p) => {
+    const voteMetrics = scoreProposalVotes(p.votes, session.votingMode, userId);
+    const owners =
+      ownersByGame.get(p.gameId) ?? fallbackOwnersByGame.get(p.gameId) ?? [];
 
-      return {
-        id: p.id,
-        note: p.note,
-        createdAt: p.createdAt,
-        game: formatGame(p.game),
-        proposedBy: p.proposer,
-        owners,
-        ...voteMetrics,
-      };
-    }),
+    return {
+      id: p.id,
+      note: p.note,
+      status: p.status,
+      acceptedAt: p.acceptedAt,
+      acceptedBy: p.accepter,
+      createdAt: p.createdAt,
+      game: formatGame(p.game),
+      proposedBy: p.proposer,
+      owners,
+      ...voteMetrics,
+    };
+  });
+
+  const acceptedProposals = sortAcceptedProposals(
+    mappedProposals.filter((p) => p.status === ProposalStatus.accepted),
   );
+  const openProposals = sortScoredProposals(
+    mappedProposals.filter((p) => p.status === ProposalStatus.open),
+  );
+  const orderedProposals = [...acceptedProposals, ...openProposals];
 
-  const userVotesUsed = scoredProposals.filter((p) => p.userVoted).length;
+  const quota = computeUserVoteQuota(
+    orderedProposals,
+    session.votingMode,
+    session.maxVotesPerUser,
+  );
 
   return {
     id: session.id,
@@ -409,15 +448,18 @@ export async function getSessionDetail(
     maxVotesPerUser: session.maxVotesPerUser,
     inviteToken: session.inviteToken,
     host: session.host,
+    canManageSession: !scope?.isGuest && (isHost || isGroupAdmin),
     confirmedCount: goingIds.length,
-    userVotesUsed,
-    votesRemaining: Math.max(0, session.maxVotesPerUser - userVotesUsed),
+    userVotesUsed: quota.userVotesUsed,
+    votesRemaining: quota.votesRemaining,
+    lockedVotesCount: quota.lockedVotesCount,
+    lockedRanks: quota.lockedRanks,
     participants: session.participants.map((p) => ({
       rsvp: p.rsvp,
       respondedAt: p.respondedAt,
       user: p.user,
     })),
-    proposals: scoredProposals,
+    proposals: orderedProposals,
   };
 }
 
@@ -543,17 +585,19 @@ export async function getSessionCombinedPool(
     }),
     prisma.sessionProposal.findMany({
       where: { sessionId },
-      select: { gameId: true },
+      select: { gameId: true, status: true },
     }),
   ]);
 
-  const proposedGameIds = new Set(existingProposals.map((p) => p.gameId));
+  const proposalStatusByGameId = new Map(
+    existingProposals.map((p) => [p.gameId, p.status]),
+  );
   const items = aggregateCombinedPool(
     ownedRows.map((row) => ({
       user: row.user,
       game: formatGame(row.game),
     })),
-    proposedGameIds,
+    proposalStatusByGameId,
     {
       confirmedCount,
       onlyCompatible,
@@ -630,6 +674,59 @@ export async function proposeGameForSession(
   return getSessionDetail(userId, sessionId, scope);
 }
 
+export async function updateProposalStatus(
+  userId: string,
+  sessionId: string,
+  proposalId: string,
+  status: ProposalStatus,
+) {
+  const { session, isHost, isGroupAdmin } = await assertSessionAccess(userId, sessionId);
+  if (!isHost && !isGroupAdmin) {
+    throw forbidden(
+      'Solo el anfitrión o un administrador del grupo puede aceptar o devolver juegos a votación',
+      'SESSION_HOST_REQUIRED',
+    );
+  }
+
+  if (
+    session.status === SessionStatus.completed ||
+    session.status === SessionStatus.cancelled
+  ) {
+    throw badRequest(
+      'No se pueden modificar los juegos confirmados en una juntada finalizada o cancelada',
+      undefined,
+      'SESSION_CLOSED',
+    );
+  }
+
+  const proposal = await prisma.sessionProposal.findFirst({
+    where: { id: proposalId, sessionId },
+    select: { id: true },
+  });
+
+  if (!proposal) {
+    throw notFound('Propuesta no encontrada en esta juntada', 'PROPOSAL_NOT_FOUND');
+  }
+
+  await prisma.sessionProposal.update({
+    where: { id: proposal.id },
+    data:
+      status === ProposalStatus.accepted
+        ? {
+            status: ProposalStatus.accepted,
+            acceptedAt: new Date(),
+            acceptedBy: userId,
+          }
+        : {
+            status: ProposalStatus.open,
+            acceptedAt: null,
+            acceptedBy: null,
+          },
+  });
+
+  return getSessionDetail(userId, sessionId);
+}
+
 export async function deleteSessionProposal(
   userId: string,
   sessionId: string,
@@ -652,11 +749,19 @@ export async function deleteSessionProposal(
 
   const proposal = await prisma.sessionProposal.findFirst({
     where: { id: proposalId, sessionId },
-    select: { id: true, proposedBy: true },
+    select: { id: true, proposedBy: true, status: true },
   });
 
   if (!proposal) {
     throw notFound('Propuesta no encontrada', 'PROPOSAL_NOT_FOUND');
+  }
+
+  if (proposal.status === ProposalStatus.accepted) {
+    throw badRequest(
+      'Primero devolvé el juego a votación antes de quitar la propuesta',
+      undefined,
+      'PROPOSAL_ALREADY_ACCEPTED',
+    );
   }
 
   if (proposal.proposedBy !== userId && !isHost && !isGroupAdmin) {
@@ -698,11 +803,19 @@ export async function castVote(
 
     const proposal = await tx.sessionProposal.findFirst({
       where: { id: proposalId, sessionId },
-      select: { id: true },
+      select: { id: true, status: true },
     });
 
     if (!proposal) {
       throw notFound('Propuesta no encontrada en esta juntada', 'PROPOSAL_NOT_FOUND');
+    }
+
+    if (proposal.status === ProposalStatus.accepted) {
+      throw badRequest(
+        'Este juego ya está confirmado para la mesa y no admite cambios de voto',
+        undefined,
+        'PROPOSAL_ALREADY_ACCEPTED',
+      );
     }
 
     if (session.votingMode === VotingMode.ranked_top3) {
@@ -710,13 +823,30 @@ export async function castVote(
         throw badRequest('En modo Top 3 el rank debe ser 1, 2 o 3', undefined, 'INVALID_RANK');
       }
 
-      // Free the same rank on any other proposal of this session
+      const lockedRankVote = await tx.sessionVote.findFirst({
+        where: {
+          userId,
+          rank,
+          proposal: { sessionId, status: ProposalStatus.accepted },
+        },
+        select: { proposalId: true },
+      });
+
+      if (lockedRankVote) {
+        throw badRequest(
+          `Tu puesto ${rank}° ya se usó en un juego confirmado para la mesa`,
+          { rank },
+          'RANK_LOCKED_IN_ACCEPTED',
+        );
+      }
+
+      // Free the same rank only on other open proposals of this session
       await tx.sessionVote.deleteMany({
         where: {
           userId,
           rank,
           proposalId: { not: proposalId },
-          proposal: { sessionId },
+          proposal: { sessionId, status: ProposalStatus.open },
         },
       });
 
@@ -729,11 +859,27 @@ export async function castVote(
     }
 
     if (session.votingMode === VotingMode.single_choice) {
+      const lockedVote = await tx.sessionVote.findFirst({
+        where: {
+          userId,
+          proposal: { sessionId, status: ProposalStatus.accepted },
+        },
+        select: { proposalId: true },
+      });
+
+      if (lockedVote) {
+        throw badRequest(
+          'Tu voto ya se usó en un juego confirmado para la mesa',
+          undefined,
+          'VOTE_LOCKED_IN_ACCEPTED',
+        );
+      }
+
       await tx.sessionVote.deleteMany({
         where: {
           userId,
           proposalId: { not: proposalId },
-          proposal: { sessionId },
+          proposal: { sessionId, status: ProposalStatus.open },
         },
       });
 
@@ -745,7 +891,7 @@ export async function castVote(
       return;
     }
 
-    // multi_vote
+    // multi_vote: votes on accepted proposals remain consumed and count toward maxVotesPerUser
     const existingVote = await tx.sessionVote.findUnique({
       where: { proposalId_userId: { proposalId, userId } },
     });
@@ -793,11 +939,28 @@ export async function removeVote(
     );
   }
 
+  const proposal = await prisma.sessionProposal.findFirst({
+    where: { id: proposalId, sessionId },
+    select: { id: true, status: true },
+  });
+
+  if (!proposal) {
+    throw notFound('Propuesta no encontrada en esta juntada', 'PROPOSAL_NOT_FOUND');
+  }
+
+  if (proposal.status === ProposalStatus.accepted) {
+    throw badRequest(
+      'No podés quitar tu voto de un juego que ya fue confirmado para la mesa',
+      undefined,
+      'PROPOSAL_ALREADY_ACCEPTED',
+    );
+  }
+
   await prisma.sessionVote.deleteMany({
     where: {
       proposalId,
       userId,
-      proposal: { sessionId },
+      proposal: { sessionId, status: ProposalStatus.open },
     },
   });
 

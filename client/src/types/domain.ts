@@ -8,6 +8,8 @@ export type VotingMode = 'single_choice' | 'multi_vote' | 'ranked_top3';
 
 export type RsvpStatus = 'going' | 'maybe' | 'not_going';
 
+export type ProposalStatus = 'open' | 'accepted';
+
 export interface UserSummary {
   id: string;
   displayName: string;
@@ -58,6 +60,7 @@ export interface LibraryGameItem extends Game {
 export interface SessionGameItem extends Game {
   owners: UserSummary[];
   isProposed: boolean;
+  proposalStatus?: ProposalStatus | null;
 }
 
 export interface SessionProposal {
@@ -66,6 +69,9 @@ export interface SessionProposal {
   owners: UserSummary[];
   proposedBy: UserSummary;
   note?: string;
+  status: ProposalStatus;
+  acceptedAt?: string;
+  acceptedBy?: UserSummary;
   voteCount: number;
   score: number;
   userVoted: boolean;
@@ -85,9 +91,12 @@ export interface GameSession {
   scheduledAt: string;
   location: string;
   host: UserSummary;
+  canManageSession?: boolean;
   status: SessionStatus;
   votingMode: VotingMode;
   maxVotesPerUser: number;
+  lockedVotesCount?: number;
+  lockedRanks?: number[];
   inviteToken: string;
   participants: SessionParticipant[];
   proposals: SessionProposal[];

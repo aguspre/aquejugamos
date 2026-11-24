@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   CalendarDays,
   Check,
+  CheckCircle2,
   Clock,
   Crown,
   Dices,
@@ -13,59 +14,60 @@ import {
   MapPin,
   MessageSquareQuote,
   Plus,
+  RotateCcw,
   Sparkles,
   ThumbsUp,
   Trophy,
   Unlock,
   Users,
   Vote,
-} from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
-import { ApiError } from '../api/client';
-import { GuestLockedView } from '../components/auth/GuestLockedView';
-import { GameCard } from '../components/game/GameCard';
-import { GameDetailDrawer } from '../components/game/GameDetailDrawer';
-import { FilterChipBar } from '../components/ui/FilterChipBar';
-import { OwnerAvatarStack } from '../components/ui/OwnerAvatarStack';
-import { PlayerCountBadge } from '../components/ui/PlayerCountBadge';
-import { WeightIndicator } from '../components/ui/WeightIndicator';
-import { useAppState } from '../context/AppStateContext';
-import { useAuth } from '../context/AuthContext';
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
+import { ApiError } from "../api/client";
+import { GuestLockedView } from "../components/auth/GuestLockedView";
+import { GameCard } from "../components/game/GameCard";
+import { GameDetailDrawer } from "../components/game/GameDetailDrawer";
+import { FilterChipBar } from "../components/ui/FilterChipBar";
+import { OwnerAvatarStack } from "../components/ui/OwnerAvatarStack";
+import { PlayerCountBadge } from "../components/ui/PlayerCountBadge";
+import { WeightIndicator } from "../components/ui/WeightIndicator";
+import { useAppState } from "../context/AppStateContext";
+import { useAuth } from "../context/AuthContext";
 import type {
   Game,
   GameFilterState,
   GameSession,
   RsvpStatus,
   SessionGameItem,
-} from '../types/domain';
-import { DEFAULT_GAME_FILTERS, filterGames } from '../utils/filterGames';
-import { formatSessionDate } from '../utils/formatDate';
+} from "../types/domain";
+import { DEFAULT_GAME_FILTERS, filterGames } from "../utils/filterGames";
+import { formatSessionDate } from "../utils/formatDate";
 
-type ActiveTab = 'proposals' | 'pool';
+type ActiveTab = "proposals" | "pool";
 
 const RSVP_OPTIONS: { id: RsvpStatus; label: string; activeClass: string }[] = [
   {
-    id: 'going',
-    label: 'Voy',
-    activeClass: 'bg-forest-600 text-white border-forest-600',
+    id: "going",
+    label: "Voy",
+    activeClass: "bg-forest-600 text-white border-forest-600",
   },
   {
-    id: 'maybe',
-    label: 'Tal vez',
-    activeClass: 'bg-ochre-500 text-white border-ochre-500',
+    id: "maybe",
+    label: "Tal vez",
+    activeClass: "bg-ochre-500 text-white border-ochre-500",
   },
   {
-    id: 'not_going',
-    label: 'No voy',
-    activeClass: 'bg-ink text-white border-ink',
+    id: "not_going",
+    label: "No voy",
+    activeClass: "bg-ink text-white border-ink",
   },
 ];
 
 const RSVP_RING: Record<RsvpStatus, string> = {
-  going: 'ring-forest-500',
-  maybe: 'ring-ochre-500',
-  not_going: 'ring-border-strong opacity-45 grayscale',
+  going: "ring-forest-500",
+  maybe: "ring-ochre-500",
+  not_going: "ring-border-strong opacity-45 grayscale",
 };
 
 export function SessionRoomPage() {
@@ -85,6 +87,7 @@ export function SessionRoomPage() {
     joinSessionByToken,
     updateRsvp,
     proposeGame,
+    updateProposalStatus,
     toggleVote,
     toggleSessionLock,
     openLogPlayModal,
@@ -96,21 +99,24 @@ export function SessionRoomPage() {
   const [sessionPool, setSessionPool] = useState<SessionGameItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<ActiveTab>('proposals');
+  const [activeTab, setActiveTab] = useState<ActiveTab>("proposals");
   const [smartPlayerFilter, setSmartPlayerFilter] = useState(true);
-  const [poolFilters, setPoolFilters] = useState<GameFilterState>(DEFAULT_GAME_FILTERS);
+  const [poolFilters, setPoolFilters] =
+    useState<GameFilterState>(DEFAULT_GAME_FILTERS);
   const [selectedGame, setSelectedGame] = useState<Game | null>(null);
   const [proposingGame, setProposingGame] = useState<Game | null>(null);
-  const [proposalNote, setProposalNote] = useState('');
+  const [proposalNote, setProposalNote] = useState("");
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [busyAction, setBusyAction] = useState(false);
 
-  const inviteTokenParam = searchParams.get('invite');
+  const inviteTokenParam = searchParams.get("invite");
   const shouldRedirectInviteToWelcome = Boolean(
     !authLoading && !isAuthenticated && inviteTokenParam,
   );
   const canLoadRoom = Boolean(
-    !authLoading && (isAuthenticated || isGuestSession) && !shouldRedirectInviteToWelcome,
+    !authLoading &&
+    (isAuthenticated || isGuestSession) &&
+    !shouldRedirectInviteToWelcome,
   );
 
   const fetchRoomData = useCallback(async () => {
@@ -118,11 +124,11 @@ export function SessionRoomPage() {
     setErrorMsg(null);
 
     try {
-      const inviteToken = searchParams.get('invite');
+      const inviteToken = searchParams.get("invite");
       let loadedSession: GameSession;
 
       if (inviteToken) {
-        loadedSession = await joinSessionByToken(inviteToken, 'going');
+        loadedSession = await joinSessionByToken(inviteToken, "going");
         setSearchParams({}, { replace: true });
       } else {
         loadedSession = await loadSessionDetail(id);
@@ -135,7 +141,7 @@ export function SessionRoomPage() {
       setErrorMsg(
         err instanceof ApiError
           ? err.message
-          : 'No se pudo cargar la sala de la juntada.',
+          : "No se pudo cargar la sala de la juntada.",
       );
     } finally {
       setLoading(false);
@@ -158,14 +164,14 @@ export function SessionRoomPage() {
 
   const poolMechanics = useMemo(
     () =>
-      Array.from(new Set(sessionPool.flatMap((g) => g.mechanics))).sort((a, b) =>
-        a.localeCompare(b, 'es'),
+      Array.from(new Set(sessionPool.flatMap((g) => g.mechanics))).sort(
+        (a, b) => a.localeCompare(b, "es"),
       ),
     [sessionPool],
   );
 
   const goingParticipants = useMemo(
-    () => session?.participants.filter((p) => p.rsvp === 'going') ?? [],
+    () => session?.participants.filter((p) => p.rsvp === "going") ?? [],
     [session],
   );
   const confirmedCount = goingParticipants.length;
@@ -200,9 +206,9 @@ export function SessionRoomPage() {
         lockTitle="Necesitás una invitación o cuenta para entrar"
         lockDescription="Si un amigo te invitó, abrí su link de invitación para ingresar con tu nombre como invitado y votar. También podés iniciar sesión con tu cuenta."
         benefits={[
-          'Confirmá asistencia (Voy / Tal vez / No voy) en las juntadas de tu grupo.',
-          'Votá qué juegos salen a la mesa en tiempo real.',
-          'Con cuenta registrada además podés proponer juegos y sumar tu ludoteca.',
+          "Confirmá asistencia (Voy / Tal vez / No voy) en las juntadas de tu grupo.",
+          "Votá qué juegos salen a la mesa en tiempo real.",
+          "Con cuenta registrada además podés proponer juegos y sumar tu ludoteca.",
         ]}
       />
     );
@@ -211,7 +217,10 @@ export function SessionRoomPage() {
   if ((authLoading || loading) && !session) {
     return (
       <div className="flex items-center justify-center py-20 text-ink-muted gap-2">
-        <Loader2 className="h-5 w-5 animate-spin text-forest-600" aria-hidden="true" />
+        <Loader2
+          className="h-5 w-5 animate-spin text-forest-600"
+          aria-hidden="true"
+        />
         <span className="text-sm font-semibold">Cargando sala de juntada…</span>
       </div>
     );
@@ -221,7 +230,7 @@ export function SessionRoomPage() {
     return (
       <div className="rounded-2xl border border-border bg-surface p-8 text-center space-y-3">
         <h1 className="font-[var(--font-display)] text-2xl font-bold text-ink">
-          {errorMsg ?? 'Juntada no encontrada'}
+          {errorMsg ?? "Juntada no encontrada"}
         </h1>
         <Link
           to="/sessions"
@@ -237,22 +246,51 @@ export function SessionRoomPage() {
   const myParticipation = session.participants.find(
     (p) => p.user.id === currentUser.id,
   );
-  const myRsvp = myParticipation?.rsvp ?? 'going';
+  const myRsvp = myParticipation?.rsvp ?? "going";
 
-  const isLocked = session.status === 'locked';
+  const isLocked = session.status === "locked";
+  const isClosed =
+    session.status === "completed" || session.status === "cancelled";
   const isHost = session.host.id === currentUser.id;
+  const canManage = Boolean(
+    isAuthenticated && (session.canManageSession ?? isHost),
+  );
+  const canAcceptOrRevert = canManage && !isClosed;
 
-  const sortedProposals = [...session.proposals].sort(
-    (a, b) => b.score - a.score || b.voteCount - a.voteCount,
+  const acceptedProposals = session.proposals.filter(
+    (p) => p.status === "accepted",
+  );
+  const openProposals = [
+    ...session.proposals.filter((p) => p.status !== "accepted"),
+  ].sort((a, b) => b.score - a.score || b.voteCount - a.voteCount);
+
+  const totalAcceptedMinutes = acceptedProposals.reduce(
+    (sum, p) => sum + (p.game.playingTimeMinutes || 0),
+    0,
   );
 
-  const maxScore = Math.max(1, ...sortedProposals.map((p) => p.score));
-  const topScore = sortedProposals[0]?.score ?? 0;
-  const winners =
-    topScore > 0 ? sortedProposals.filter((p) => p.score === topScore) : [];
+  const maxOpenScore = Math.max(1, ...openProposals.map((p) => p.score));
+  const topOpenScore = openProposals[0]?.score ?? 0;
+  const openWinners =
+    topOpenScore > 0
+      ? openProposals.filter((p) => p.score === topOpenScore)
+      : [];
+  const finalLineup =
+    acceptedProposals.length > 0 ? acceptedProposals : openWinners;
 
   const userVotesUsed = session.proposals.filter((p) => p.userVoted).length;
   const votesRemaining = Math.max(0, session.maxVotesPerUser - userVotesUsed);
+  const lockedVotesCount =
+    session.lockedVotesCount ??
+    acceptedProposals.filter((p) => p.userVoted).length;
+  const lockedRanks = new Set<number>(
+    session.lockedRanks ??
+      acceptedProposals
+        .filter((p) => p.userVoted && p.userRank !== undefined)
+        .map((p) => p.userRank!),
+  );
+  const hasLockedSingleVote =
+    session.votingMode === "single_choice" && lockedVotesCount > 0;
 
   const runSessionAction = async (
     action: () => Promise<GameSession>,
@@ -269,7 +307,9 @@ export function SessionRoomPage() {
       }
     } catch (err) {
       setErrorMsg(
-        err instanceof ApiError ? err.message : 'No se pudo completar la acción.',
+        err instanceof ApiError
+          ? err.message
+          : "No se pudo completar la acción.",
       );
     } finally {
       setBusyAction(false);
@@ -286,12 +326,12 @@ export function SessionRoomPage() {
   const handleConfirmProposal = async (game: Game, note?: string) => {
     await runSessionAction(() => proposeGame(session.id, game, note), true);
     setProposingGame(null);
-    setProposalNote('');
+    setProposalNote("");
   };
 
   const handleLogWinnerPlay = (gameId?: string) => {
     openLogPlayModal({
-      gameId: gameId ?? winners[0]?.game.id,
+      gameId: gameId ?? finalLineup[0]?.game.id,
       sessionId: session.id,
       sessionTitle: session.title,
       groupId: session.groupId,
@@ -300,8 +340,8 @@ export function SessionRoomPage() {
   };
 
   const selectedGameOwners = selectedGame
-    ? sessionPool.find((g) => g.id === selectedGame.id)?.owners ??
-      session.proposals.find((p) => p.game.id === selectedGame.id)?.owners
+    ? (sessionPool.find((g) => g.id === selectedGame.id)?.owners ??
+      session.proposals.find((p) => p.game.id === selectedGame.id)?.owners)
     : undefined;
 
   return (
@@ -325,27 +365,35 @@ export function SessionRoomPage() {
             >
               {copiedInvite ? (
                 <>
-                  <Check className="h-3.5 w-3.5 text-forest-600" aria-hidden="true" />
+                  <Check
+                    className="h-3.5 w-3.5 text-forest-600"
+                    aria-hidden="true"
+                  />
                   <span className="text-forest-700">¡Link copiado!</span>
                 </>
               ) : (
                 <>
-                  <Link2 className="h-3.5 w-3.5 text-ink-muted" aria-hidden="true" />
+                  <Link2
+                    className="h-3.5 w-3.5 text-ink-muted"
+                    aria-hidden="true"
+                  />
                   <span>Copiar link</span>
                 </>
               )}
             </button>
           )}
 
-          {isAuthenticated && isHost && (
+          {canManage && !isClosed && (
             <button
               type="button"
               disabled={busyAction}
-              onClick={() => void runSessionAction(() => toggleSessionLock(session.id))}
+              onClick={() =>
+                void runSessionAction(() => toggleSessionLock(session.id))
+              }
               className={`inline-flex min-h-9 items-center gap-1.5 rounded-xl px-3.5 text-xs font-bold transition disabled:opacity-60 ${
                 isLocked
-                  ? 'border border-border bg-surface text-ink hover:bg-canvas-subtle'
-                  : 'bg-ink text-white hover:bg-forest-900'
+                  ? "border border-border bg-surface text-ink hover:bg-canvas-subtle"
+                  : "bg-ink text-white hover:bg-forest-900"
               }`}
             >
               {isLocked ? (
@@ -382,8 +430,8 @@ export function SessionRoomPage() {
               <span
                 className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-0.5 text-xs font-bold ${
                   isLocked
-                    ? 'border-forest-200 bg-forest-50 text-forest-700'
-                    : 'border-terracotta-100 bg-terracotta-50 text-terracotta-700'
+                    ? "border-forest-200 bg-forest-50 text-forest-700"
+                    : "border-terracotta-100 bg-terracotta-50 text-terracotta-700"
                 }`}
               >
                 {isLocked ? (
@@ -391,7 +439,7 @@ export function SessionRoomPage() {
                 ) : (
                   <Vote className="h-3.5 w-3.5" aria-hidden="true" />
                 )}
-                {isLocked ? 'Votación cerrada' : 'Votación abierta'}
+                {isLocked ? "Votación cerrada" : "Votación abierta"}
               </span>
               <span className="text-xs font-semibold text-ink-subtle">
                 {session.groupName}
@@ -411,7 +459,10 @@ export function SessionRoomPage() {
                 {formatSessionDate(session.scheduledAt)}
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <MapPin className="h-4 w-4 text-terracotta-500" aria-hidden="true" />
+                <MapPin
+                  className="h-4 w-4 text-terracotta-500"
+                  aria-hidden="true"
+                />
                 {session.location}
               </span>
             </div>
@@ -423,10 +474,11 @@ export function SessionRoomPage() {
             </span>
             <div>
               <span className="block text-xs font-extrabold text-forest-900">
-                {confirmedCount === 1 ? 'confirmado' : 'confirmados'}
+                {confirmedCount === 1 ? "confirmado" : "confirmados"}
               </span>
               <span className="block text-[11px] font-medium text-forest-700 num-tabular">
-                {sessionPool.filter((g) => !g.isExpansion).length} juegos en el pool
+                {sessionPool.filter((g) => !g.isExpansion).length} juegos en el
+                pool
               </span>
             </div>
           </div>
@@ -437,7 +489,11 @@ export function SessionRoomPage() {
           <div className="flex flex-wrap items-center gap-2">
             {session.participants.map(({ user, rsvp }) => {
               const rsvpText =
-                rsvp === 'going' ? 'Voy' : rsvp === 'maybe' ? 'Tal vez' : 'No voy';
+                rsvp === "going"
+                  ? "Voy"
+                  : rsvp === "maybe"
+                    ? "Tal vez"
+                    : "No voy";
               return (
                 <div
                   key={user.id}
@@ -455,11 +511,11 @@ export function SessionRoomPage() {
                   </span>
                   <span
                     className={`text-[10px] font-bold ${
-                      rsvp === 'going'
-                        ? 'text-forest-700'
-                        : rsvp === 'maybe'
-                          ? 'text-ochre-700'
-                          : 'text-ink-subtle'
+                      rsvp === "going"
+                        ? "text-forest-700"
+                        : rsvp === "maybe"
+                          ? "text-ochre-700"
+                          : "text-ink-subtle"
                     }`}
                   >
                     {rsvpText}
@@ -488,7 +544,7 @@ export function SessionRoomPage() {
                     className={`min-h-8 rounded-lg px-2.5 text-xs font-bold transition border ${
                       active
                         ? opt.activeClass
-                        : 'border-transparent text-ink-muted hover:text-ink'
+                        : "border-transparent text-ink-muted hover:text-ink"
                     }`}
                   >
                     {opt.label}
@@ -509,21 +565,21 @@ export function SessionRoomPage() {
         <button
           type="button"
           role="tab"
-          aria-selected={activeTab === 'proposals'}
-          onClick={() => setActiveTab('proposals')}
+          aria-selected={activeTab === "proposals"}
+          onClick={() => setActiveTab("proposals")}
           className={`flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-sm font-bold transition ${
-            activeTab === 'proposals'
-              ? 'bg-forest-600 text-white shadow-xs'
-              : 'text-ink-muted hover:bg-canvas-subtle hover:text-ink'
+            activeTab === "proposals"
+              ? "bg-forest-600 text-white shadow-xs"
+              : "text-ink-muted hover:bg-canvas-subtle hover:text-ink"
           }`}
         >
           <Vote className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="truncate">Propuestas y Votación</span>
           <span
             className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-extrabold num-tabular ${
-              activeTab === 'proposals'
-                ? 'bg-white/20 text-white'
-                : 'bg-canvas-deep text-ink-muted'
+              activeTab === "proposals"
+                ? "bg-white/20 text-white"
+                : "bg-canvas-deep text-ink-muted"
             }`}
           >
             {session.proposals.length}
@@ -533,21 +589,21 @@ export function SessionRoomPage() {
         <button
           type="button"
           role="tab"
-          aria-selected={activeTab === 'pool'}
-          onClick={() => setActiveTab('pool')}
+          aria-selected={activeTab === "pool"}
+          onClick={() => setActiveTab("pool")}
           className={`flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-sm font-bold transition ${
-            activeTab === 'pool'
-              ? 'bg-forest-600 text-white shadow-xs'
-              : 'text-ink-muted hover:bg-canvas-subtle hover:text-ink'
+            activeTab === "pool"
+              ? "bg-forest-600 text-white shadow-xs"
+              : "text-ink-muted hover:bg-canvas-subtle hover:text-ink"
           }`}
         >
           <Library className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="truncate">Pool de Asistentes</span>
           <span
             className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-extrabold num-tabular ${
-              activeTab === 'pool'
-                ? 'bg-white/20 text-white'
-                : 'bg-canvas-deep text-ink-muted'
+              activeTab === "pool"
+                ? "bg-white/20 text-white"
+                : "bg-canvas-deep text-ink-muted"
             }`}
           >
             {sessionPool.filter((g) => !g.isExpansion).length}
@@ -556,9 +612,9 @@ export function SessionRoomPage() {
       </div>
 
       {/* TAB 1: PROPOSALS & VOTING */}
-      {activeTab === 'proposals' && (
-        <section className="space-y-4">
-          {isLocked && winners.length > 0 ? (
+      {activeTab === "proposals" && (
+        <section className="space-y-5">
+          {isLocked && finalLineup.length > 0 ? (
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border border-ochre-500/40 bg-gradient-to-r from-ochre-50 via-surface to-forest-50 p-4 sm:p-5 shadow-xs">
               <div className="flex items-start gap-3">
                 <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-ochre-500 text-white shadow-xs">
@@ -566,14 +622,16 @@ export function SessionRoomPage() {
                 </span>
                 <div>
                   <span className="text-[11px] font-extrabold uppercase tracking-wider text-ochre-700">
-                    ¡Mesa definida!
+                    {acceptedProposals.length > 0
+                      ? "¡Mesa definida!"
+                      : "¡Mesa definida por votación!"}
                   </span>
                   <h2 className="font-[var(--font-display)] text-lg sm:text-xl font-bold text-ink">
-                    {winners.map((w) => w.game.name).join(' · ')}
+                    {finalLineup.map((w) => w.game.name).join(" · ")}
                   </h2>
                   <p className="text-xs text-ink-muted mt-0.5">
-                    Cuando terminen la partida, registrala para sumar al historial y tabla
-                    de victorias del grupo.
+                    Cuando terminen la partida, registrala para sumar al
+                    historial y tabla de victorias del grupo.
                   </p>
                 </div>
               </div>
@@ -581,13 +639,13 @@ export function SessionRoomPage() {
                 type="button"
                 onClick={() =>
                   isAuthenticated
-                    ? handleLogWinnerPlay(winners[0]?.game.id)
-                    : openAuthModal('signin')
+                    ? handleLogWinnerPlay(finalLineup[0]?.game.id)
+                    : openAuthModal("signin")
                 }
                 className={`shrink-0 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4.5 text-sm font-bold shadow-xs transition ${
                   isAuthenticated
-                    ? 'bg-terracotta-500 text-white hover:bg-terracotta-600'
-                    : 'border border-border-strong bg-surface text-ink-muted hover:bg-canvas-subtle'
+                    ? "bg-terracotta-500 text-white hover:bg-terracotta-600"
+                    : "border border-border-strong bg-surface text-ink-muted hover:bg-canvas-subtle"
                 }`}
               >
                 {isAuthenticated ? (
@@ -595,38 +653,62 @@ export function SessionRoomPage() {
                 ) : (
                   <Lock className="h-4 w-4" aria-hidden="true" />
                 )}
-                {isAuthenticated ? 'Registrar partida jugada' : 'Iniciá sesión para registrar'}
+                {isAuthenticated
+                  ? "Registrar partida jugada"
+                  : "Iniciá sesión para registrar"}
               </button>
             </div>
-          ) : (
+          ) : !isLocked && !isClosed ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface px-4 py-3 shadow-xs">
               <div className="flex items-center gap-2.5 text-sm">
                 <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-forest-50 text-forest-700">
                   <Sparkles className="h-4 w-4" aria-hidden="true" />
                 </span>
                 <div>
-                  {session.votingMode === 'ranked_top3' ? (
+                  {session.votingMode === "ranked_top3" ? (
                     <p className="font-semibold text-ink">
-                      Modo Top 3 Rankeado ·{' '}
+                      Modo Top 3 Rankeado ·{" "}
                       <span className="text-forest-700 font-bold num-tabular">
                         1° = 3 pts · 2° = 2 pts · 3° = 1 pt
                       </span>
+                      {lockedRanks.size > 0 && (
+                        <span className="ml-1.5 text-xs font-semibold text-ink-subtle num-tabular">
+                          (ya usado en confirmados:{" "}
+                          {Array.from(lockedRanks)
+                            .sort((a, b) => a - b)
+                            .map((r) => `${r}°`)
+                            .join(", ")}
+                          )
+                        </span>
+                      )}
                     </p>
-                  ) : session.votingMode === 'single_choice' ? (
+                  ) : session.votingMode === "single_choice" ? (
                     <p className="font-semibold text-ink">
-                      Voto simple ·{' '}
+                      Voto simple ·{" "}
                       <span className="text-forest-700 font-bold">
-                        {votesRemaining === 1
-                          ? 'Tenés 1 voto disponible'
-                          : 'Ya elegiste tu favorito (podés cambiarlo)'}
+                        {hasLockedSingleVote
+                          ? "Tu voto ya se usó en un juego confirmado"
+                          : votesRemaining === 1
+                            ? "Tenés 1 voto disponible"
+                            : "Ya elegiste tu favorito (podés cambiarlo)"}
                       </span>
                     </p>
                   ) : (
                     <p className="font-semibold text-ink">
-                      Multi-voto ·{' '}
+                      Multi-voto ·{" "}
                       <span className="text-forest-700 font-bold num-tabular">
-                        Te quedan {votesRemaining} de {session.maxVotesPerUser} votos
+                        Te quedan {votesRemaining} de {session.maxVotesPerUser}{" "}
+                        votos
                       </span>
+                      {lockedVotesCount > 0 && (
+                        <span className="ml-1.5 text-xs font-semibold text-ink-subtle num-tabular">
+                          ({lockedVotesCount}{" "}
+                          {lockedVotesCount === 1
+                            ? "usado en confirmados"
+                            : "usados en confirmados"}
+                          )
+                        </span>
+                      )}
                     </p>
                   )}
                 </div>
@@ -634,52 +716,282 @@ export function SessionRoomPage() {
 
               <button
                 type="button"
-                onClick={() => setActiveTab('pool')}
+                onClick={() => setActiveTab("pool")}
                 className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-forest-200 bg-forest-50 px-3 text-xs font-bold text-forest-700 hover:bg-forest-100 transition"
               >
                 <Plus className="h-3.5 w-3.5" aria-hidden="true" />
                 Proponer otro juego
               </button>
             </div>
+          ) : null}
+
+          {/* Confirmed / Accepted Lineup */}
+          {acceptedProposals.length > 0 && (
+            <div className="rounded-3xl border border-forest-200 bg-forest-50/55 p-4 sm:p-5 space-y-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-forest-600 text-white shadow-xs">
+                    <CheckCircle2 className="h-4.5 w-4.5" aria-hidden="true" />
+                  </span>
+                  <div>
+                    <h2 className="font-[var(--font-display)] text-base sm:text-lg font-bold text-forest-900 leading-tight">
+                      Confirmados para la mesa ({acceptedProposals.length})
+                    </h2>
+                    <p className="text-xs text-forest-700 num-tabular">
+                      {totalAcceptedMinutes > 0
+                        ? `~${totalAcceptedMinutes} min estimados en total`
+                        : "Juegos ya confirmados para esta juntada"}
+                      {!isLocked && !isClosed && openProposals.length > 0
+                        ? " · La votación sigue abierta para el resto"
+                        : ""}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2.5">
+                {acceptedProposals.map((proposal) => (
+                  <article
+                    key={proposal.id}
+                    className="rounded-2xl border border-forest-200/90 bg-surface p-3.5 sm:p-4 shadow-xs"
+                  >
+                    <div className="flex flex-col sm:flex-row gap-3.5">
+                      <div className="relative sm:w-32 aspect-[16/10] sm:aspect-[4/3] shrink-0 overflow-hidden rounded-xl bg-canvas-subtle">
+                        <img
+                          src={proposal.game.imageUrl}
+                          alt={`Portada de ${proposal.game.name}`}
+                          className="h-full w-full object-cover"
+                        />
+                        <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-forest-600 px-2 py-0.5 text-[11px] font-bold text-white shadow-xs">
+                          <CheckCircle2
+                            className="h-3 w-3"
+                            aria-hidden="true"
+                          />
+                          Confirmado
+                        </span>
+                      </div>
+
+                      <div className="flex-1 min-w-0 space-y-2">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedGame(proposal.game)}
+                              className="text-left font-[var(--font-display)] text-base sm:text-lg font-bold text-ink hover:text-forest-600 transition-colors"
+                            >
+                              {proposal.game.name}
+                            </button>
+                            <p className="text-xs text-ink-subtle">
+                              Propuesto por{" "}
+                              <strong className="text-ink-muted">
+                                {proposal.proposedBy.displayName}
+                              </strong>
+                              {proposal.acceptedBy && (
+                                <>
+                                  {" "}
+                                  · Confirmado por{" "}
+                                  <strong className="text-forest-700">
+                                    {proposal.acceptedBy.displayName}
+                                  </strong>
+                                </>
+                              )}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            {proposal.userVoted && (
+                              <span className="inline-flex items-center gap-1 rounded-full border border-terracotta-200 bg-terracotta-50 px-2.5 py-0.5 text-[11px] font-bold text-terracotta-700 num-tabular">
+                                <ThumbsUp
+                                  className="h-3 w-3 fill-terracotta-500 text-terracotta-500"
+                                  aria-hidden="true"
+                                />
+                                {session.votingMode === "ranked_top3" &&
+                                proposal.userRank
+                                  ? `Tu ${proposal.userRank}°`
+                                  : "Tu voto"}
+                              </span>
+                            )}
+                            {proposal.score > 0 && (
+                              <span className="inline-flex items-baseline gap-1 rounded-xl bg-forest-50 border border-forest-200/80 px-2.5 py-0.5 num-tabular">
+                                <span className="text-sm font-extrabold text-forest-800">
+                                  {proposal.score}
+                                </span>
+                                <span className="text-[11px] font-semibold text-forest-700">
+                                  {session.votingMode === "ranked_top3"
+                                    ? "pts"
+                                    : proposal.voteCount === 1
+                                      ? "voto"
+                                      : "votos"}
+                                </span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <PlayerCountBadge
+                            minPlayers={proposal.game.minPlayers}
+                            maxPlayers={proposal.game.maxPlayers}
+                            bestPlayers={proposal.game.bestPlayers}
+                            targetPlayers={confirmedCount}
+                          />
+                          <span className="inline-flex items-center gap-1 rounded-full border border-border bg-canvas-subtle px-2 py-0.5 text-[11px] font-semibold text-ink-muted num-tabular">
+                            <Clock
+                              className="h-3 w-3 opacity-75"
+                              aria-hidden="true"
+                            />
+                            {proposal.game.playingTimeMinutes} min
+                          </span>
+                          <WeightIndicator weight={proposal.game.weight} />
+                        </div>
+
+                        {proposal.note && (
+                          <div className="flex items-start gap-2 rounded-xl bg-canvas px-3 py-1.5 text-xs text-ink-muted border border-border/70">
+                            <MessageSquareQuote
+                              className="h-3.5 w-3.5 mt-0.5 shrink-0 text-terracotta-500"
+                              aria-hidden="true"
+                            />
+                            <p className="italic">“{proposal.note}”</p>
+                          </div>
+                        )}
+
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                          <OwnerAvatarStack
+                            owners={proposal.owners}
+                            size="sm"
+                          />
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            {canAcceptOrRevert && (
+                              <button
+                                type="button"
+                                disabled={busyAction}
+                                onClick={() =>
+                                  void runSessionAction(
+                                    () =>
+                                      updateProposalStatus(
+                                        session.id,
+                                        proposal.id,
+                                        "open",
+                                      ),
+                                    true,
+                                  )
+                                }
+                                className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-border bg-canvas px-3 text-xs font-semibold text-ink-muted hover:border-border-strong hover:text-ink disabled:opacity-60 transition"
+                              >
+                                <RotateCcw
+                                  className="h-3.5 w-3.5"
+                                  aria-hidden="true"
+                                />
+                                Volver a votación
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                isAuthenticated
+                                  ? handleLogWinnerPlay(proposal.game.id)
+                                  : openAuthModal("signin")
+                              }
+                              className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-forest-200 bg-forest-50 px-3 text-xs font-bold text-forest-800 hover:bg-forest-100 transition"
+                            >
+                              {isAuthenticated ? (
+                                <Dices
+                                  className="h-3.5 w-3.5"
+                                  aria-hidden="true"
+                                />
+                              ) : (
+                                <Lock
+                                  className="h-3.5 w-3.5 text-ink-subtle"
+                                  aria-hidden="true"
+                                />
+                              )}
+                              Registrar partida
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
           )}
 
-          {sortedProposals.length === 0 ? (
+          {/* Open Proposals in Voting */}
+          {session.proposals.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-border-strong bg-surface/70 px-6 py-12 text-center space-y-3">
               <p className="font-[var(--font-display)] text-xl font-bold text-ink">
                 Todavía no hay juegos propuestos
               </p>
               <p className="text-sm text-ink-muted max-w-md mx-auto">
-                Entrá al <strong>Pool de Asistentes</strong> para ver todos los juegos que
-                llevan los {confirmedCount} confirmados y postular tus favoritos.
+                Entrá al <strong>Pool de Asistentes</strong> para ver todos los
+                juegos que llevan los {confirmedCount} confirmados y postular
+                tus favoritos.
               </p>
               <button
                 type="button"
-                onClick={() => setActiveTab('pool')}
+                onClick={() => setActiveTab("pool")}
                 className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-forest-600 px-5 text-sm font-bold text-white hover:bg-forest-700 transition"
               >
                 <Library className="h-4 w-4" aria-hidden="true" />
                 Explorar Pool de Asistentes
               </button>
             </div>
+          ) : openProposals.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-border-strong bg-surface/70 px-6 py-8 text-center space-y-2.5">
+              <p className="font-[var(--font-display)] text-lg font-bold text-ink">
+                Todos los juegos propuestos ya están confirmados
+              </p>
+              {!isLocked && !isClosed && (
+                <>
+                  <p className="text-xs sm:text-sm text-ink-muted max-w-md mx-auto">
+                    Si quieren sumar otro juego (un filler o segunda partida),
+                    podés proponerlo desde el Pool de Asistentes.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("pool")}
+                    className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-forest-600 px-4 text-xs font-bold text-white hover:bg-forest-700 transition"
+                  >
+                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                    Proponer otro juego
+                  </button>
+                </>
+              )}
+            </div>
           ) : (
             <div className="space-y-3">
-              {sortedProposals.map((proposal, index) => {
-                const isWinner = topScore > 0 && proposal.score === topScore;
-                const progressPct = Math.round((proposal.score / maxScore) * 100);
+              {acceptedProposals.length > 0 && (
+                <div className="flex items-center justify-between pt-1">
+                  <h2 className="text-xs font-extrabold uppercase tracking-wider text-ink-subtle">
+                    En votación ({openProposals.length})
+                  </h2>
+                </div>
+              )}
+
+              {openProposals.map((proposal, index) => {
+                const isWinner =
+                  topOpenScore > 0 && proposal.score === topOpenScore;
+                const progressPct = Math.round(
+                  (proposal.score / maxOpenScore) * 100,
+                );
                 const cannotAddVote =
-                  !proposal.userVoted &&
-                  session.votingMode === 'multi_vote' &&
-                  votesRemaining === 0;
+                  (!proposal.userVoted &&
+                    session.votingMode === "multi_vote" &&
+                    votesRemaining === 0) ||
+                  hasLockedSingleVote;
 
                 return (
                   <article
                     key={proposal.id}
                     className={`rounded-2xl border bg-surface p-4 sm:p-5 transition shadow-[var(--shadow-card)] ${
-                      isLocked && isWinner
-                        ? 'border-ochre-500 ring-2 ring-ochre-500/20'
+                      isLocked && acceptedProposals.length === 0 && isWinner
+                        ? "border-ochre-500 ring-2 ring-ochre-500/20"
                         : proposal.userVoted
-                          ? 'border-forest-500/60'
-                          : 'border-border'
+                          ? "border-forest-500/60"
+                          : "border-border"
                     }`}
                   >
                     <div className="flex flex-col sm:flex-row gap-4">
@@ -692,8 +1004,8 @@ export function SessionRoomPage() {
                         <span
                           className={`absolute left-2 top-2 inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-extrabold shadow-xs num-tabular ${
                             index === 0 && proposal.score > 0
-                              ? 'bg-ochre-500 text-white'
-                              : 'bg-surface/92 text-ink'
+                              ? "bg-ochre-500 text-white"
+                              : "bg-surface/92 text-ink"
                           }`}
                         >
                           {index === 0 && proposal.score > 0 && (
@@ -714,7 +1026,7 @@ export function SessionRoomPage() {
                               {proposal.game.name}
                             </button>
                             <p className="text-xs text-ink-subtle">
-                              Propuesto por{' '}
+                              Propuesto por{" "}
                               <strong className="text-ink-muted">
                                 {proposal.proposedBy.displayName}
                               </strong>
@@ -727,11 +1039,11 @@ export function SessionRoomPage() {
                                 {proposal.score}
                               </span>
                               <span className="text-xs font-semibold text-ink-muted">
-                                {session.votingMode === 'ranked_top3'
-                                  ? 'pts'
+                                {session.votingMode === "ranked_top3"
+                                  ? "pts"
                                   : proposal.voteCount === 1
-                                    ? 'voto'
-                                    : 'votos'}
+                                    ? "voto"
+                                    : "votos"}
                               </span>
                             </span>
                           </div>
@@ -745,7 +1057,10 @@ export function SessionRoomPage() {
                             targetPlayers={confirmedCount}
                           />
                           <span className="inline-flex items-center gap-1 rounded-full border border-border bg-canvas-subtle px-2 py-0.5 text-[11px] font-semibold text-ink-muted num-tabular">
-                            <Clock className="h-3 w-3 opacity-75" aria-hidden="true" />
+                            <Clock
+                              className="h-3 w-3 opacity-75"
+                              aria-hidden="true"
+                            />
                             {proposal.game.playingTimeMinutes} min
                           </span>
                           <WeightIndicator weight={proposal.game.weight} />
@@ -767,7 +1082,7 @@ export function SessionRoomPage() {
                         >
                           <div
                             className={`h-full rounded-full transition-all duration-300 ${
-                              isWinner ? 'bg-terracotta-500' : 'bg-forest-500'
+                              isWinner ? "bg-terracotta-500" : "bg-forest-500"
                             }`}
                             style={{
                               width: `${proposal.score > 0 ? Math.max(8, progressPct) : 0}%`,
@@ -776,86 +1091,137 @@ export function SessionRoomPage() {
                         </div>
 
                         <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                          <OwnerAvatarStack owners={proposal.owners} size="sm" />
+                          <OwnerAvatarStack
+                            owners={proposal.owners}
+                            size="sm"
+                          />
 
-                          {isLocked ? (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                isAuthenticated
-                                  ? handleLogWinnerPlay(proposal.game.id)
-                                  : openAuthModal('signin')
-                              }
-                              className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-border bg-canvas px-3.5 text-xs font-bold text-ink hover:border-forest-600 hover:text-forest-700 transition"
-                            >
-                              {isAuthenticated ? (
-                                <Dices className="h-3.5 w-3.5" aria-hidden="true" />
-                              ) : (
-                                <Lock className="h-3.5 w-3.5 text-ink-subtle" aria-hidden="true" />
-                              )}
-                              Registrar partida
-                            </button>
-                          ) : session.votingMode === 'ranked_top3' ? (
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-[11px] font-bold text-ink-subtle mr-1">
-                                Tu puesto:
-                              </span>
-                              {[1, 2, 3].map((rank) => {
-                                const isSelected =
-                                  proposal.userVoted && proposal.userRank === rank;
-                                return (
-                                  <button
-                                    key={rank}
-                                    type="button"
-                                    disabled={busyAction}
-                                    onClick={() =>
-                                      void runSessionAction(() =>
-                                        toggleVote(session.id, proposal.id, rank),
-                                      )
-                                    }
-                                    className={`inline-flex min-h-9 min-w-11 items-center justify-center rounded-xl border px-2.5 text-xs font-extrabold num-tabular transition ${
-                                      isSelected
-                                        ? 'border-terracotta-500 bg-terracotta-500 text-white shadow-xs'
-                                        : 'border-border bg-canvas text-ink-muted hover:border-forest-600 hover:text-ink'
-                                    }`}
-                                  >
-                                    {rank}°
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <button
-                              type="button"
-                              disabled={busyAction || cannotAddVote}
-                              onClick={() =>
-                                void runSessionAction(() =>
-                                  toggleVote(session.id, proposal.id),
-                                )
-                              }
-                              className={`inline-flex min-h-10 items-center gap-2 rounded-xl px-4 text-xs font-bold transition ${
-                                proposal.userVoted
-                                  ? 'border border-terracotta-200 bg-terracotta-50 text-terracotta-700 hover:bg-terracotta-100'
-                                  : cannotAddVote
-                                    ? 'bg-canvas-subtle text-ink-subtle cursor-not-allowed'
-                                    : 'bg-forest-600 text-white hover:bg-forest-700 shadow-xs'
-                              }`}
-                            >
-                              <ThumbsUp
-                                className={`h-3.5 w-3.5 ${
+                          <div className="flex flex-wrap items-center gap-2">
+                            {canAcceptOrRevert && (
+                              <button
+                                type="button"
+                                disabled={busyAction}
+                                onClick={() =>
+                                  void runSessionAction(
+                                    () =>
+                                      updateProposalStatus(
+                                        session.id,
+                                        proposal.id,
+                                        "accepted",
+                                      ),
+                                    true,
+                                  )
+                                }
+                                className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-forest-200 bg-forest-50 px-3 text-xs font-bold text-forest-800 hover:bg-forest-100 disabled:opacity-60 transition"
+                              >
+                                <CheckCircle2
+                                  className="h-3.5 w-3.5"
+                                  aria-hidden="true"
+                                />
+                                Aceptar juego
+                              </button>
+                            )}
+
+                            {isLocked || isClosed ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  isAuthenticated
+                                    ? handleLogWinnerPlay(proposal.game.id)
+                                    : openAuthModal("signin")
+                                }
+                                className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-border bg-canvas px-3.5 text-xs font-bold text-ink hover:border-forest-600 hover:text-forest-700 transition"
+                              >
+                                {isAuthenticated ? (
+                                  <Dices
+                                    className="h-3.5 w-3.5"
+                                    aria-hidden="true"
+                                  />
+                                ) : (
+                                  <Lock
+                                    className="h-3.5 w-3.5 text-ink-subtle"
+                                    aria-hidden="true"
+                                  />
+                                )}
+                                Registrar partida
+                              </button>
+                            ) : session.votingMode === "ranked_top3" ? (
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[11px] font-bold text-ink-subtle mr-1">
+                                  Tu puesto:
+                                </span>
+                                {[1, 2, 3].map((rank) => {
+                                  const isSelected =
+                                    proposal.userVoted &&
+                                    proposal.userRank === rank;
+                                  const isRankLocked = lockedRanks.has(rank);
+                                  return (
+                                    <button
+                                      key={rank}
+                                      type="button"
+                                      disabled={busyAction || isRankLocked}
+                                      title={
+                                        isRankLocked
+                                          ? `Tu puesto ${rank}° ya se usó en un juego confirmado`
+                                          : undefined
+                                      }
+                                      onClick={() =>
+                                        void runSessionAction(() =>
+                                          toggleVote(
+                                            session.id,
+                                            proposal.id,
+                                            rank,
+                                          ),
+                                        )
+                                      }
+                                      className={`inline-flex min-h-9 min-w-11 items-center justify-center rounded-xl border px-2.5 text-xs font-extrabold num-tabular transition ${
+                                        isSelected
+                                          ? "border-terracotta-500 bg-terracotta-500 text-white shadow-xs"
+                                          : isRankLocked
+                                            ? "border-border bg-canvas-subtle text-ink-subtle opacity-55 cursor-not-allowed line-through"
+                                            : "border-border bg-canvas text-ink-muted hover:border-forest-600 hover:text-ink"
+                                      }`}
+                                    >
+                                      {rank}°
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={busyAction || cannotAddVote}
+                                onClick={() =>
+                                  void runSessionAction(() =>
+                                    toggleVote(session.id, proposal.id),
+                                  )
+                                }
+                                className={`inline-flex min-h-10 items-center gap-2 rounded-xl px-4 text-xs font-bold transition ${
                                   proposal.userVoted
-                                    ? 'fill-terracotta-500 text-terracotta-500'
-                                    : ''
+                                    ? "border border-terracotta-200 bg-terracotta-50 text-terracotta-700 hover:bg-terracotta-100"
+                                    : cannotAddVote
+                                      ? "bg-canvas-subtle text-ink-subtle cursor-not-allowed"
+                                      : "bg-forest-600 text-white hover:bg-forest-700 shadow-xs"
                                 }`}
-                                aria-hidden="true"
-                              />
-                              {proposal.userVoted
-                                ? 'Votado (quitar)'
-                                : cannotAddVote
-                                  ? 'Sin votos disponibles'
-                                  : 'Votar este juego'}
-                            </button>
-                          )}
+                              >
+                                <ThumbsUp
+                                  className={`h-3.5 w-3.5 ${
+                                    proposal.userVoted
+                                      ? "fill-terracotta-500 text-terracotta-500"
+                                      : ""
+                                  }`}
+                                  aria-hidden="true"
+                                />
+                                {proposal.userVoted
+                                  ? "Votado (quitar)"
+                                  : hasLockedSingleVote
+                                    ? "Voto usado en confirmado"
+                                    : cannotAddVote
+                                      ? "Sin votos disponibles"
+                                      : "Votar este juego"}
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -868,7 +1234,7 @@ export function SessionRoomPage() {
       )}
 
       {/* TAB 2: COMBINED POOL */}
-      {activeTab === 'pool' && (
+      {activeTab === "pool" && (
         <section className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-forest-200 bg-forest-50/75 px-4 py-3.5">
             <div className="flex items-start gap-2.5">
@@ -882,7 +1248,7 @@ export function SessionRoomPage() {
                 <p className="text-xs text-forest-700">
                   {smartPlayerFilter
                     ? `Mostrando juegos compatibles con ${confirmedCount} jugadores (expansiones ocultas por defecto).`
-                    : 'Mostrando toda la colección combinada sin restringir por cantidad de asistentes.'}
+                    : "Mostrando toda la colección combinada sin restringir por cantidad de asistentes."}
                 </p>
               </div>
             </div>
@@ -894,22 +1260,25 @@ export function SessionRoomPage() {
               onClick={() => setSmartPlayerFilter((prev) => !prev)}
               className={`self-start sm:self-center inline-flex min-h-10 shrink-0 items-center gap-2 rounded-xl border px-3.5 text-xs font-bold transition ${
                 smartPlayerFilter
-                  ? 'border-forest-600 bg-surface text-forest-700 shadow-xs'
-                  : 'border-border bg-surface/70 text-ink-muted'
+                  ? "border-forest-600 bg-surface text-forest-700 shadow-xs"
+                  : "border-border bg-surface/70 text-ink-muted"
               }`}
             >
-              <Sparkles className="h-3.5 w-3.5 text-ochre-500" aria-hidden="true" />
+              <Sparkles
+                className="h-3.5 w-3.5 text-ochre-500"
+                aria-hidden="true"
+              />
               <span className="num-tabular">
                 Compatibles con {confirmedCount} jug.
               </span>
               <span
                 className={`inline-flex h-4 w-7 items-center rounded-full p-0.5 transition-colors ${
-                  smartPlayerFilter ? 'bg-forest-600' : 'bg-canvas-deep'
+                  smartPlayerFilter ? "bg-forest-600" : "bg-canvas-deep"
                 }`}
               >
                 <span
                   className={`h-3 w-3 rounded-full bg-white transition-transform ${
-                    smartPlayerFilter ? 'translate-x-3' : 'translate-x-0'
+                    smartPlayerFilter ? "translate-x-3" : "translate-x-0"
                   }`}
                 />
               </span>
@@ -937,7 +1306,7 @@ export function SessionRoomPage() {
               </p>
               <p className="text-sm text-ink-muted">
                 {sessionPool.length === 0
-                  ? 'Sincronizá tu colección de BGG en Mi Ludoteca para que aparezcan juegos aquí.'
+                  ? "Sincronizá tu colección de BGG en Mi Ludoteca para que aparezcan juegos aquí."
                   : `Probá desactivar el filtro de ${confirmedCount} jugadores o limpiar las mecánicas.`}
               </p>
             </div>
@@ -951,7 +1320,24 @@ export function SessionRoomPage() {
                   targetPlayers={confirmedCount}
                   onSelect={setSelectedGame}
                   actionSlot={
-                    item.isProposed ? (
+                    item.proposalStatus === "accepted" ? (
+                      <div className="flex items-center justify-between gap-2 rounded-xl border border-forest-300 bg-forest-100/80 px-3 py-2 text-xs font-bold text-forest-800">
+                        <span className="inline-flex items-center gap-1.5">
+                          <CheckCircle2
+                            className="h-3.5 w-3.5 text-forest-700"
+                            aria-hidden="true"
+                          />
+                          Confirmado
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab("proposals")}
+                          className="underline hover:text-forest-950"
+                        >
+                          Ver mesa
+                        </button>
+                      </div>
+                    ) : item.isProposed ? (
                       <div className="flex items-center justify-between gap-2 rounded-xl border border-forest-200 bg-forest-50 px-3 py-2 text-xs font-bold text-forest-700">
                         <span className="inline-flex items-center gap-1.5">
                           <Check className="h-3.5 w-3.5" aria-hidden="true" />
@@ -959,7 +1345,7 @@ export function SessionRoomPage() {
                         </span>
                         <button
                           type="button"
-                          onClick={() => setActiveTab('proposals')}
+                          onClick={() => setActiveTab("proposals")}
                           className="underline hover:text-forest-900"
                         >
                           Ver votos
@@ -968,10 +1354,10 @@ export function SessionRoomPage() {
                     ) : (
                       <button
                         type="button"
-                        disabled={isLocked || busyAction}
+                        disabled={isLocked || isClosed || busyAction}
                         onClick={() => {
                           setProposingGame(item);
-                          setProposalNote('');
+                          setProposalNote("");
                         }}
                         className="w-full inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl bg-forest-600 px-3 text-xs font-bold text-white shadow-xs hover:bg-forest-700 disabled:opacity-50 transition"
                       >
@@ -1050,7 +1436,9 @@ export function SessionRoomPage() {
               <button
                 type="button"
                 disabled={busyAction}
-                onClick={() => void handleConfirmProposal(proposingGame, proposalNote)}
+                onClick={() =>
+                  void handleConfirmProposal(proposingGame, proposalNote)
+                }
                 className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-forest-600 px-4 text-xs font-bold text-white hover:bg-forest-700 disabled:opacity-70"
               >
                 {busyAction && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
@@ -1071,7 +1459,7 @@ export function SessionRoomPage() {
             : false
         }
         onPropose={
-          !isLocked
+          !isLocked && !isClosed
             ? (game) => {
                 setSelectedGame(null);
                 setProposingGame(game);

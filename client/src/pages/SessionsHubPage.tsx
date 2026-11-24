@@ -2,6 +2,7 @@ import {
   ArrowRight,
   CalendarDays,
   Check,
+  CheckCircle2,
   Crown,
   Link2,
   Loader2,
@@ -11,68 +12,69 @@ import {
   Plus,
   UserPlus,
   Vote,
-} from 'lucide-react';
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { CreateSessionModal } from '../components/sessions/CreateSessionModal';
-import { OwnerAvatarStack } from '../components/ui/OwnerAvatarStack';
-import { useAppState } from '../context/AppStateContext';
-import { useAuth } from '../context/AuthContext';
-import type { GameSession, SessionStatus, VotingMode } from '../types/domain';
-import { formatSessionDate } from '../utils/formatDate';
+} from "lucide-react";
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { CreateSessionModal } from "../components/sessions/CreateSessionModal";
+import { OwnerAvatarStack } from "../components/ui/OwnerAvatarStack";
+import { useAppState } from "../context/AppStateContext";
+import { useAuth } from "../context/AuthContext";
+import type { GameSession, SessionStatus, VotingMode } from "../types/domain";
+import { formatSessionDate } from "../utils/formatDate";
 
-const STATUS_META: Record<
-  SessionStatus,
-  { label: string; className: string }
-> = {
-  planning: {
-    label: 'Planificando',
-    className: 'bg-teal-50 text-teal-700 border-teal-100',
-  },
-  voting: {
-    label: 'Votación abierta',
-    className: 'bg-terracotta-50 text-terracotta-700 border-terracotta-100',
-  },
-  locked: {
-    label: 'Votación cerrada',
-    className: 'bg-forest-50 text-forest-700 border-forest-200',
-  },
-  completed: {
-    label: 'Finalizada',
-    className: 'bg-canvas-subtle text-ink-muted border-border',
-  },
-  cancelled: {
-    label: 'Cancelada',
-    className: 'bg-canvas-subtle text-ink-subtle border-border',
-  },
-};
+const STATUS_META: Record<SessionStatus, { label: string; className: string }> =
+  {
+    planning: {
+      label: "Planificando",
+      className: "bg-teal-50 text-teal-700 border-teal-100",
+    },
+    voting: {
+      label: "Votación abierta",
+      className: "bg-terracotta-50 text-terracotta-700 border-terracotta-100",
+    },
+    locked: {
+      label: "Votación cerrada",
+      className: "bg-forest-50 text-forest-700 border-forest-200",
+    },
+    completed: {
+      label: "Finalizada",
+      className: "bg-canvas-subtle text-ink-muted border-border",
+    },
+    cancelled: {
+      label: "Cancelada",
+      className: "bg-canvas-subtle text-ink-subtle border-border",
+    },
+  };
 
 const VOTING_MODE_LABEL: Record<VotingMode, string> = {
-  single_choice: 'Voto simple (1)',
-  multi_vote: 'Multi-voto',
-  ranked_top3: 'Top 3 Rankeado',
+  single_choice: "Voto simple (1)",
+  multi_vote: "Multi-voto",
+  ranked_top3: "Top 3 Rankeado",
 };
 
 export function SessionsHubPage() {
-  const { isAuthenticated, isGuestSession, guestScope, openAuthModal } = useAuth();
-  const { isBootstrapping, activeGroup, sessions, createSession } = useAppState();
+  const { isAuthenticated, isGuestSession, guestScope, openAuthModal } =
+    useAuth();
+  const { isBootstrapping, activeGroup, sessions, createSession } =
+    useAppState();
   const [createOpen, setCreateOpen] = useState(false);
-  const [scope, setScope] = useState<'group' | 'all'>('group');
+  const [scope, setScope] = useState<"group" | "all">("group");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const navigate = useNavigate();
 
   const visibleSessions =
-    scope === 'all' || !activeGroup
+    scope === "all" || !activeGroup
       ? sessions
       : sessions.filter(
           (s) => s.groupId === activeGroup.id || s.groupId === null,
         );
 
   const upcoming = visibleSessions.filter(
-    (s) => s.status === 'planning' || s.status === 'voting' || s.status === 'locked',
+    (s) =>
+      s.status === "planning" || s.status === "voting" || s.status === "locked",
   );
   const past = visibleSessions.filter(
-    (s) => s.status === 'completed' || s.status === 'cancelled',
+    (s) => s.status === "completed" || s.status === "cancelled",
   );
 
   const handleCopyInvite = (session: GameSession) => {
@@ -91,11 +93,11 @@ export function SessionsHubPage() {
             <span className="text-xs font-bold uppercase tracking-wider text-forest-600">
               {isGuestSession && guestScope?.groupName
                 ? `Invitado en ${guestScope.groupName}`
-                : scope === 'group' && activeGroup
+                : scope === "group" && activeGroup
                   ? activeGroup.name
                   : isAuthenticated
-                    ? 'Todas tus juntadas'
-                    : 'Modo invitado'}
+                    ? "Todas tus juntadas"
+                    : "Modo invitado"}
             </span>
             {isAuthenticated && (
               <Link
@@ -110,8 +112,8 @@ export function SessionsHubPage() {
             Juntadas
           </h1>
           <p className="text-sm sm:text-base text-ink-muted max-w-xl">
-            Confirmá asistencia, cruzá las colecciones de quienes van y votá qué sale a la
-            mesa.
+            Confirmá asistencia, cruzá las colecciones de quienes van y votá qué
+            sale a la mesa.
           </p>
         </div>
 
@@ -120,22 +122,22 @@ export function SessionsHubPage() {
             <div className="inline-flex rounded-xl border border-border bg-surface p-0.5">
               <button
                 type="button"
-                onClick={() => setScope('group')}
+                onClick={() => setScope("group")}
                 className={`min-h-9 rounded-lg px-3 text-xs font-bold transition ${
-                  scope === 'group'
-                    ? 'bg-forest-50 text-forest-700'
-                    : 'text-ink-muted hover:text-ink'
+                  scope === "group"
+                    ? "bg-forest-50 text-forest-700"
+                    : "text-ink-muted hover:text-ink"
                 }`}
               >
                 Grupo activo
               </button>
               <button
                 type="button"
-                onClick={() => setScope('all')}
+                onClick={() => setScope("all")}
                 className={`min-h-9 rounded-lg px-3 text-xs font-bold transition ${
-                  scope === 'all'
-                    ? 'bg-forest-50 text-forest-700'
-                    : 'text-ink-muted hover:text-ink'
+                  scope === "all"
+                    ? "bg-forest-50 text-forest-700"
+                    : "text-ink-muted hover:text-ink"
                 }`}
               >
                 Todas ({sessions.length})
@@ -146,12 +148,12 @@ export function SessionsHubPage() {
           <button
             type="button"
             onClick={() =>
-              isAuthenticated ? setCreateOpen(true) : openAuthModal('signin')
+              isAuthenticated ? setCreateOpen(true) : openAuthModal("signin")
             }
             className={`inline-flex min-h-11 items-center gap-2 rounded-xl px-4.5 text-sm font-bold shadow-xs transition ${
               isAuthenticated
-                ? 'bg-forest-600 text-white hover:bg-forest-700'
-                : 'border border-border-strong bg-canvas-subtle text-ink-muted hover:bg-canvas-deep hover:text-ink'
+                ? "bg-forest-600 text-white hover:bg-forest-700"
+                : "border border-border-strong bg-canvas-subtle text-ink-muted hover:bg-canvas-deep hover:text-ink"
             }`}
           >
             {isAuthenticated ? (
@@ -166,7 +168,10 @@ export function SessionsHubPage() {
 
       {isBootstrapping ? (
         <div className="flex items-center justify-center py-16 text-ink-muted gap-2">
-          <Loader2 className="h-5 w-5 animate-spin text-forest-600" aria-hidden="true" />
+          <Loader2
+            className="h-5 w-5 animate-spin text-forest-600"
+            aria-hidden="true"
+          />
           <span className="text-sm font-semibold">Cargando juntadas…</span>
         </div>
       ) : upcoming.length === 0 ? (
@@ -175,23 +180,26 @@ export function SessionsHubPage() {
             {isAuthenticated || isGuestSession ? (
               <CalendarDays className="h-6 w-6" aria-hidden="true" />
             ) : (
-              <Lock className="h-6 w-6 text-terracotta-600" aria-hidden="true" />
+              <Lock
+                className="h-6 w-6 text-terracotta-600"
+                aria-hidden="true"
+              />
             )}
           </div>
           <div className="space-y-1">
             <h2 className="font-[var(--font-display)] text-2xl font-bold text-ink">
               {isGuestSession
-                ? `Todavía no hay juntadas activas${guestScope?.groupName ? ` en ${guestScope.groupName}` : ''}`
+                ? `Todavía no hay juntadas activas${guestScope?.groupName ? ` en ${guestScope.groupName}` : ""}`
                 : isAuthenticated
-                  ? 'Todavía no hay juntadas programadas'
-                  : 'Iniciá sesión o entrá con un link de invitación'}
+                  ? "Todavía no hay juntadas programadas"
+                  : "Iniciá sesión o entrá con un link de invitación"}
             </h2>
             <p className="text-sm text-ink-muted max-w-md mx-auto">
               {isGuestSession
-                ? 'Cuando el grupo publique una juntada, va a aparecer acá para que confirmes asistencia y votes.'
+                ? "Cuando el grupo publique una juntada, va a aparecer acá para que confirmes asistencia y votes."
                 : isAuthenticated
-                  ? 'Creá una juntada para tu grupo o generá un link directo para que tus amigos confirmen asistencia y voten qué jugar.'
-                  : 'En modo invitado no podés crear juntadas ni grupos. Si un amigo te compartió un link de invitación, abrilo para ingresar con tu nombre y votar.'}
+                  ? "Creá una juntada para tu grupo o generá un link directo para que tus amigos confirmen asistencia y voten qué jugar."
+                  : "En modo invitado no podés crear juntadas ni grupos. Si un amigo te compartió un link de invitación, abrilo para ingresar con tu nombre y votar."}
             </p>
           </div>
           {isAuthenticated ? (
@@ -207,7 +215,7 @@ export function SessionsHubPage() {
             <div className="flex flex-wrap justify-center gap-2.5 pt-1">
               <button
                 type="button"
-                onClick={() => openAuthModal('signin')}
+                onClick={() => openAuthModal("signin")}
                 className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-forest-600 px-5 text-sm font-bold text-white hover:bg-forest-700 transition"
               >
                 <LogIn className="h-4 w-4" aria-hidden="true" />
@@ -215,10 +223,13 @@ export function SessionsHubPage() {
               </button>
               <button
                 type="button"
-                onClick={() => openAuthModal('signup')}
+                onClick={() => openAuthModal("signup")}
                 className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border-strong bg-surface px-5 text-sm font-bold text-ink hover:bg-canvas-subtle transition"
               >
-                <UserPlus className="h-4 w-4 text-forest-600" aria-hidden="true" />
+                <UserPlus
+                  className="h-4 w-4 text-forest-600"
+                  aria-hidden="true"
+                />
                 Crear cuenta
               </button>
             </div>
@@ -234,8 +245,15 @@ export function SessionsHubPage() {
 
           <div className="grid gap-4 lg:grid-cols-2">
             {upcoming.map((session) => {
-              const going = session.participants.filter((p) => p.rsvp === 'going');
-              const topProposal = [...session.proposals].sort(
+              const going = session.participants.filter(
+                (p) => p.rsvp === "going",
+              );
+              const acceptedProposals = session.proposals.filter(
+                (p) => p.status === "accepted",
+              );
+              const openTopProposal = [
+                ...session.proposals.filter((p) => p.status !== "accepted"),
+              ].sort(
                 (a, b) => b.score - a.score || b.voteCount - a.voteCount,
               )[0];
               const statusMeta = STATUS_META[session.status];
@@ -250,7 +268,7 @@ export function SessionsHubPage() {
                       <span
                         className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-bold ${statusMeta.className}`}
                       >
-                        {session.status === 'voting' ? (
+                        {session.status === "voting" ? (
                           <Vote className="h-3.5 w-3.5" aria-hidden="true" />
                         ) : (
                           <Lock className="h-3.5 w-3.5" aria-hidden="true" />
@@ -260,9 +278,9 @@ export function SessionsHubPage() {
 
                       <span className="text-[11px] font-semibold text-ink-subtle num-tabular">
                         {VOTING_MODE_LABEL[session.votingMode]}
-                        {session.votingMode === 'multi_vote'
+                        {session.votingMode === "multi_vote"
                           ? ` (hasta ${session.maxVotesPerUser})`
-                          : ''}
+                          : ""}
                       </span>
                     </div>
 
@@ -293,35 +311,87 @@ export function SessionsHubPage() {
                       </div>
                     </div>
 
-                    {topProposal ? (
+                    {acceptedProposals.length > 0 ? (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-3 rounded-xl border border-forest-200 bg-forest-50/75 p-2.5">
+                          <img
+                            src={acceptedProposals[0]!.game.thumbnailUrl}
+                            alt=""
+                            className="h-11 w-14 shrink-0 rounded-lg object-cover"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-forest-700">
+                              <CheckCircle2
+                                className="h-3.5 w-3.5 text-forest-600"
+                                aria-hidden="true"
+                              />
+                              {acceptedProposals.length === 1
+                                ? "Confirmado para la mesa"
+                                : `Confirmados para la mesa (${acceptedProposals.length})`}
+                            </p>
+                            <p className="text-sm font-bold text-ink truncate">
+                              {acceptedProposals
+                                .map((p) => p.game.name)
+                                .join(" · ")}
+                            </p>
+                          </div>
+                        </div>
+
+                        {session.status !== "locked" && openTopProposal && (
+                          <div className="flex items-center justify-between gap-2 rounded-xl border border-border/80 bg-canvas/70 px-3 py-2 text-xs">
+                            <span className="flex items-center gap-1.5 min-w-0 text-ink-muted">
+                              <Crown
+                                className="h-3.5 w-3.5 shrink-0 text-ochre-500"
+                                aria-hidden="true"
+                              />
+                              <span className="shrink-0 font-semibold text-ochre-700">
+                                En votación:
+                              </span>
+                              <span className="font-bold text-ink truncate">
+                                {openTopProposal.game.name}
+                              </span>
+                            </span>
+                            <span className="shrink-0 font-extrabold text-forest-700 num-tabular">
+                              {openTopProposal.score}
+                              {session.votingMode === "ranked_top3"
+                                ? " pts"
+                                : ""}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    ) : openTopProposal ? (
                       <div className="flex items-center gap-3 rounded-xl border border-border/80 bg-canvas/70 p-2.5">
                         <img
-                          src={topProposal.game.thumbnailUrl}
+                          src={openTopProposal.game.thumbnailUrl}
                           alt=""
                           className="h-11 w-14 shrink-0 rounded-lg object-cover"
                         />
                         <div className="min-w-0 flex-1">
                           <p className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-ochre-700">
-                            <Crown className="h-3 w-3 text-ochre-500" aria-hidden="true" />
-                            {session.status === 'locked'
-                              ? 'Elegido para jugar'
-                              : 'Liderando'}
+                            <Crown
+                              className="h-3 w-3 text-ochre-500"
+                              aria-hidden="true"
+                            />
+                            {session.status === "locked"
+                              ? "Elegido para jugar"
+                              : "Liderando"}
                           </p>
                           <p className="text-sm font-bold text-ink truncate">
-                            {topProposal.game.name}
+                            {openTopProposal.game.name}
                           </p>
                         </div>
                         <div className="text-right shrink-0 pr-1">
                           <span className="block text-sm font-extrabold text-forest-700 num-tabular">
-                            {topProposal.score}
-                            {session.votingMode === 'ranked_top3' ? ' pts' : ''}
+                            {openTopProposal.score}
+                            {session.votingMode === "ranked_top3" ? " pts" : ""}
                           </span>
                         </div>
                       </div>
                     ) : (
                       <div className="rounded-xl border border-dashed border-border-strong bg-canvas/50 px-3.5 py-2.5 text-xs text-ink-muted">
-                        Todavía no hay juegos propuestos. ¡Entrá a la sala para proponer el
-                        primero!
+                        Todavía no hay juegos propuestos. ¡Entrá a la sala para
+                        proponer el primero!
                       </div>
                     )}
                   </div>
@@ -329,7 +399,7 @@ export function SessionsHubPage() {
                   <footer className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-border/80">
                     <OwnerAvatarStack
                       owners={going.map((p) => p.user)}
-                      prefix={`${going.length} ${going.length === 1 ? 'confirmado' : 'confirmados'}`}
+                      prefix={`${going.length} ${going.length === 1 ? "confirmado" : "confirmados"}`}
                       maxVisible={4}
                     />
 
@@ -351,7 +421,10 @@ export function SessionsHubPage() {
                             </>
                           ) : (
                             <>
-                              <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+                              <Link2
+                                className="h-3.5 w-3.5"
+                                aria-hidden="true"
+                              />
                               <span>Invitar</span>
                             </>
                           )}
@@ -362,8 +435,13 @@ export function SessionsHubPage() {
                         to={`/sessions/${session.id}`}
                         className="inline-flex min-h-9 items-center gap-1 rounded-lg bg-forest-600 px-3 text-xs font-bold text-white hover:bg-forest-700 transition"
                       >
-                        <span>{isAuthenticated ? 'Abrir sala' : 'Entrar y votar'}</span>
-                        <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>
+                          {isAuthenticated ? "Abrir sala" : "Entrar y votar"}
+                        </span>
+                        <ArrowRight
+                          className="h-3.5 w-3.5"
+                          aria-hidden="true"
+                        />
                       </Link>
                     </div>
                   </footer>
@@ -389,7 +467,8 @@ export function SessionsHubPage() {
                 <div>
                   <p className="text-sm font-bold text-ink">{session.title}</p>
                   <p className="text-xs text-ink-subtle num-tabular">
-                    {formatSessionDate(session.scheduledAt)} · {session.location}
+                    {formatSessionDate(session.scheduledAt)} ·{" "}
+                    {session.location}
                   </p>
                 </div>
                 <Link

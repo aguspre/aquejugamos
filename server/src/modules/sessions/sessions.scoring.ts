@@ -1,4 +1,4 @@
-import type { VotingMode } from '@prisma/client';
+import type { ProposalStatus, VotingMode } from '@prisma/client';
 
 export interface VoteRecord {
   userId: string;
@@ -12,6 +12,25 @@ export interface ScoredProposalBase {
   score: number;
   userVoted: boolean;
   userRank: number | null;
+}
+
+export interface AcceptedProposalBase {
+  id: string;
+  createdAt: Date;
+  acceptedAt: Date | null;
+}
+
+export interface ProposalVoteState {
+  status: ProposalStatus;
+  userVoted: boolean;
+  userRank: number | null;
+}
+
+export interface UserVoteQuotaSummary {
+  userVotesUsed: number;
+  votesRemaining: number;
+  lockedVotesCount: number;
+  lockedRanks: number[];
 }
 
 export function getPointsForVote(votingMode: VotingMode, rank: number): number {
@@ -63,6 +82,56 @@ export function sortScoredProposals<T extends ScoredProposalBase>(proposals: T[]
   );
 }
 
+export function sortAcceptedProposals<T extends AcceptedProposalBase>(proposals: T[]): T[] {
+  return [...proposals].sort(
+    (a, b) =>
+      (a.acceptedAt?.getTime() ?? a.createdAt.getTime()) -
+        (b.acceptedAt?.getTime() ?? b.createdAt.getTime()) ||
+      a.createdAt.getTime() - b.createdAt.getTime(),
+  );
+}
+
+/**
+ * Computes vote usage across ALL session proposals (both open and accepted).
+ * Votes cast on an accepted proposal stay consumed and are NOT released.
+ */
+export function computeUserVoteQuota(
+  proposals: ProposalVoteState[],
+  votingMode: VotingMode,
+  maxVotesPerUser: number,
+): UserVoteQuotaSummary {
+  let userVotesUsed = 0;
+  let lockedVotesCount = 0;
+  const lockedRanks: number[] = [];
+
+  for (const proposal of proposals) {
+    if (!proposal.userVoted) continue;
+    userVotesUsed += 1;
+    if (proposal.status === 'accepted') {
+      lockedVotesCount += 1;
+      if (proposal.userRank !== null) {
+        lockedRanks.push(proposal.userRank);
+      }
+    }
+  }
+
+  const effectiveMax =
+    votingMode === 'single_choice'
+      ? 1
+      : votingMode === 'ranked_top3'
+        ? 3
+        : maxVotesPerUser;
+
+  lockedRanks.sort((a, b) => a - b);
+
+  return {
+    userVotesUsed,
+    votesRemaining: Math.max(0, effectiveMax - userVotesUsed),
+    lockedVotesCount,
+    lockedRanks,
+  };
+}
+
 export interface OwnerSummary {
   id: string;
   displayName: string;
@@ -96,11 +165,12 @@ export interface OwnedGameRow {
 export interface CombinedPoolItem extends PoolGameInput {
   owners: OwnerSummary[];
   isProposed: boolean;
+  proposalStatus: ProposalStatus | null;
 }
 
 export function aggregateCombinedPool(
   rows: OwnedGameRow[],
-  proposedGameIds: Set<string>,
+  proposedGames: Set<string> | Map<string, ProposalStatus>,
   options: {
     confirmedCount: number;
     onlyCompatible?: boolean;
@@ -139,13 +209,23 @@ export function aggregateCombinedPool(
   }
 
   return Array.from(grouped.values())
-    .map(({ game, ownersById }) => ({
-      ...game,
-      owners: Array.from(ownersById.values()).sort((a, b) =>
-        a.displayName.localeCompare(b.displayName, 'es'),
-      ),
-      isProposed: proposedGameIds.has(game.id),
-    }))
+    .map(({ game, ownersById }) => {
+      const proposalStatus: ProposalStatus | null =
+        proposedGames instanceof Map
+          ? (proposedGames.get(game.id) ?? null)
+          : proposedGames.has(game.id)
+            ? 'open'
+            : null;
+
+      return {
+        ...game,
+        owners: Array.from(ownersById.values()).sort((a, b) =>
+          a.displayName.localeCompare(b.displayName, 'es'),
+        ),
+        isProposed: proposalStatus !== null,
+        proposalStatus,
+      };
+    })
     .sort((a, b) => {
       const aBest = a.bestPlayers.includes(confirmedCount) ? 1 : 0;
       const bBest = b.bestPlayers.includes(confirmedCount) ? 1 : 0;

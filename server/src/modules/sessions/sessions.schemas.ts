@@ -1,4 +1,4 @@
-import { RsvpStatus, SessionStatus, VotingMode } from '@prisma/client';
+import { ProposalStatus, RsvpStatus, SessionStatus, VotingMode } from '@prisma/client';
 import { z } from 'zod';
 
 const booleanQueryParam = z
@@ -77,6 +77,10 @@ export const proposalParamsSchema = z.object({
 
 export const castVoteSchema = z.object({
   rank: z.coerce.number().int().min(1).max(3).optional().default(1),
+});
+
+export const updateProposalStatusSchema = z.object({
+  status: z.nativeEnum(ProposalStatus),
 });
 
 export type ListSessionsQuery = z.infer<typeof listSessionsQuerySchema>;

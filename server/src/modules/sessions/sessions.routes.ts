@@ -9,6 +9,7 @@ import {
   proposalParamsSchema,
   sessionIdParamsSchema,
   sessionPoolQuerySchema,
+  updateProposalStatusSchema,
   updateRsvpSchema,
   updateSessionStatusSchema,
 } from './sessions.schemas.js';
@@ -23,6 +24,7 @@ import {
   proposeGameForSession,
   removeVote,
   updateParticipantRsvp,
+  updateProposalStatus,
   updateSessionStatus,
   type SessionAccessScope,
 } from './sessions.service.js';
@@ -116,6 +118,22 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     );
     return reply.status(201).send({ session });
   });
+
+  app.patch(
+    '/:sessionId/proposals/:proposalId/status',
+    { preHandler: [requireRegisteredUser] },
+    async (request) => {
+      const { sessionId, proposalId } = proposalParamsSchema.parse(request.params);
+      const { status } = updateProposalStatusSchema.parse(request.body);
+      const session = await updateProposalStatus(
+        request.user.sub,
+        sessionId,
+        proposalId,
+        status,
+      );
+      return { session };
+    },
+  );
 
   app.delete('/:sessionId/proposals/:proposalId', async (request) => {
     const { sessionId, proposalId } = proposalParamsSchema.parse(request.params);

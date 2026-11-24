@@ -36,6 +36,7 @@ import type {
   LibraryGameItem,
   PlayLog,
   PlayLogPlayer,
+  ProposalStatus,
   RsvpStatus,
   SessionGameItem,
   UserGameStatus,
@@ -134,6 +135,11 @@ interface AppStateContextValue {
   removeProposal: (
     sessionId: string,
     proposalId: string,
+  ) => Promise<GameSession>;
+  updateProposalStatus: (
+    sessionId: string,
+    proposalId: string,
+    status: ProposalStatus,
   ) => Promise<GameSession>;
   toggleVote: (
     sessionId: string,
@@ -729,6 +735,25 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [ensureSessionAccess, upsertSession],
   );
 
+  const updateProposalStatus = useCallback(
+    async (
+      sessionId: string,
+      proposalId: string,
+      status: ProposalStatus,
+    ): Promise<GameSession> => {
+      ensureRegistered();
+      const { session } = await sessionsApi.updateProposalStatus(
+        sessionId,
+        proposalId,
+        status,
+      );
+      const mapped = mapSessionDetail(session);
+      upsertSession(mapped);
+      return mapped;
+    },
+    [ensureRegistered, upsertSession],
+  );
+
   const toggleVote = useCallback(
     async (
       sessionId: string,
@@ -869,6 +894,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         updateRsvp,
         proposeGame,
         removeProposal,
+        updateProposalStatus,
         toggleVote,
         toggleSessionLock,
         addPlayLog,
