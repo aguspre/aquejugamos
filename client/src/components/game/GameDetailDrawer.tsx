@@ -3,9 +3,11 @@ import {
   Clock,
   ExternalLink,
   Layers,
+  Loader2,
   Plus,
   Sparkles,
   Star,
+  Trash2,
   X,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -21,6 +23,7 @@ interface GameDetailDrawerProps {
   notes?: string;
   onUpdateStatus?: (gameId: string, status: UserGameStatus) => void;
   onUpdateNotes?: (gameId: string, notes: string) => void;
+  onRemove?: (gameId: string) => Promise<void> | void;
   onClose: () => void;
   onPropose?: (game: Game) => void;
   isProposed?: boolean;
@@ -40,6 +43,7 @@ export function GameDetailDrawer({
   notes,
   onUpdateStatus,
   onUpdateNotes,
+  onRemove,
   onClose,
   onPropose,
   isProposed,
@@ -47,10 +51,14 @@ export function GameDetailDrawer({
 }: GameDetailDrawerProps) {
   const [draftNotes, setDraftNotes] = useState(notes ?? '');
   const [notesSaved, setNotesSaved] = useState(false);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   useEffect(() => {
     setDraftNotes(notes ?? '');
     setNotesSaved(false);
+    setConfirmingRemove(false);
+    setRemoving(false);
   }, [game?.id, notes]);
 
   useEffect(() => {
@@ -270,6 +278,63 @@ export function GameDetailDrawer({
                 <p className="text-sm text-ink-muted leading-relaxed">{notes}</p>
               </div>
             )
+          )}
+
+          {/* Remove from Personal Library */}
+          {onRemove && (
+            <div className="pt-2 border-t border-border/80">
+              {confirmingRemove ? (
+                <div className="rounded-xl border border-terracotta-200 bg-terracotta-50/90 p-3.5 space-y-3">
+                  <div className="space-y-1">
+                    <p className="text-xs font-bold text-terracotta-700">
+                      ¿Quitar “{game.name}” de tu ludoteca?
+                    </p>
+                    <p className="text-xs text-terracotta-700/85">
+                      Se eliminará de tu colección personal (podés volver a agregarlo más adelante desde BGG).
+                    </p>
+                  </div>
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      disabled={removing}
+                      onClick={() => setConfirmingRemove(false)}
+                      className="min-h-9 rounded-lg border border-border bg-surface px-3 text-xs font-semibold text-ink-muted hover:bg-canvas-subtle disabled:opacity-60"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      disabled={removing}
+                      onClick={async () => {
+                        setRemoving(true);
+                        try {
+                          await onRemove(game.id);
+                        } finally {
+                          setRemoving(false);
+                        }
+                      }}
+                      className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-terracotta-600 px-3.5 text-xs font-bold text-white hover:bg-terracotta-700 disabled:opacity-70 transition"
+                    >
+                      {removing ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      )}
+                      Sí, quitar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingRemove(true)}
+                  className="w-full inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-terracotta-200 bg-terracotta-50/60 px-3.5 text-xs font-bold text-terracotta-700 hover:bg-terracotta-50 hover:border-terracotta-500/50 transition"
+                >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  Quitar de mi ludoteca
+                </button>
+              )}
+            </div>
           )}
         </div>
 

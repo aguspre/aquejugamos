@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Search,
   Sparkles,
+  Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
@@ -51,6 +52,7 @@ export function LibraryPage() {
     searchBgg,
     importBggGame,
     updateLibraryItem,
+    removeLibraryItem,
     proposeGame,
   } = useAppState();
 
@@ -80,6 +82,8 @@ export function LibraryPage() {
 
   // Drawer & BGG manual search modal
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
+  const [gameToRemove, setGameToRemove] = useState<Game | null>(null);
+  const [removingGame, setRemovingGame] = useState(false);
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [bggQuery, setBggQuery] = useState("");
   const [bggResults, setBggResults] = useState<BggSearchResult[]>([]);
@@ -112,6 +116,15 @@ export function LibraryPage() {
       cancelled = true;
     };
   }, [isAuthenticated, lastBggSyncLabel]);
+
+  useEffect(() => {
+    if (!gameToRemove || removingGame) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setGameToRemove(null);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [gameToRemove, removingGame]);
 
   const activeVotingSession =
     sessions.find((s) => s.status === "voting") ?? sessions[0];
@@ -274,6 +287,35 @@ export function LibraryPage() {
       setSyncError(
         err instanceof ApiError ? err.message : "No se pudo proponer el juego.",
       );
+    }
+  };
+
+  const handleRemoveFromLibrary = async (game: Game) => {
+    setRemovingGame(true);
+    setSyncError(null);
+    try {
+      await removeLibraryItem(game.id);
+      setBggResults((prev) =>
+        prev.map((item) =>
+          item.bggId === game.bggId ? { ...item, inLibraryStatus: null } : item,
+        ),
+      );
+      if (selectedGameId === game.id) {
+        setSelectedGameId(null);
+      }
+      setGameToRemove(null);
+      setToastMessage({
+        text: `Se quitó "${game.name}" de tu ludoteca.`,
+      });
+      setTimeout(() => setToastMessage(null), 4000);
+    } catch (err) {
+      setSyncError(
+        err instanceof ApiError
+          ? err.message
+          : "No se pudo quitar el juego de tu ludoteca.",
+      );
+    } finally {
+      setRemovingGame(false);
     }
   };
 
@@ -626,6 +668,17 @@ export function LibraryPage() {
                   status={item.status}
                   personalRating={item.personalRating}
                   onSelect={(game) => setSelectedGameId(game.id)}
+                  headerAction={
+                    <button
+                      type="button"
+                      onClick={() => setGameToRemove(item)}
+                      aria-label={`Quitar ${item.name} de mi ludoteca`}
+                      title="Quitar de mi ludoteca"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-ink-subtle hover:bg-terracotta-50 hover:text-terracotta-700 transition"
+                    >
+                      <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                  }
                 />
               ))}
             </div>
@@ -643,6 +696,11 @@ export function LibraryPage() {
         }
         onUpdateNotes={(gameId, notes) =>
           void updateLibraryItem(gameId, { notes })
+        }
+        onRemove={
+          selectedEntry
+            ? () => handleRemoveFromLibrary(selectedEntry)
+            : undefined
         }
         isProposed={
           selectedEntry && activeVotingSession
@@ -663,6 +721,83 @@ export function LibraryPage() {
         }
         onClose={() => setSelectedGameId(null)}
       />
+
+      {/* Confirm Remove From Library Modal */}
+      {gameToRemove && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="remove-game-title"
+        >
+          <button
+            type="button"
+            aria-label="Cerrar"
+            disabled={removingGame}
+            onClick={() => setGameToRemove(null)}
+            className="fixed inset-0 bg-ink/45 backdrop-blur-[2px]"
+          />
+          <div className="relative z-10 w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl border border-border bg-surface p-5 shadow-[var(--shadow-floating)] space-y-4">
+            <div className="flex items-start gap-3">
+              <img
+                src={gameToRemove.thumbnailUrl}
+                alt=""
+                className="h-12 w-12 shrink-0 rounded-xl object-cover border border-border bg-canvas-subtle"
+              />
+              <div className="min-w-0 flex-1">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-terracotta-600">
+                  Quitar de mi ludoteca
+                </span>
+                <h2
+                  id="remove-game-title"
+                  className="font-[var(--font-display)] text-lg font-bold text-ink"
+                >
+                  ¿Eliminar “{gameToRemove.name}”?
+                </h2>
+              </div>
+              <button
+                type="button"
+                disabled={removingGame}
+                onClick={() => setGameToRemove(null)}
+                aria-label="Cerrar"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-ink-muted hover:bg-canvas-subtle"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <p className="text-sm text-ink-muted">
+              El juego se quitará de tu colección personal y dejará de aparecer en
+              el pool de tus próximas juntadas. Si lo necesitás, podés volver a
+              importarlo desde BoardGameGeek.
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                disabled={removingGame}
+                onClick={() => setGameToRemove(null)}
+                className="min-h-10 rounded-xl border border-border bg-surface px-4 text-xs font-semibold text-ink-muted hover:bg-canvas-subtle disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={removingGame}
+                onClick={() => void handleRemoveFromLibrary(gameToRemove)}
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-terracotta-600 px-4 text-xs font-bold text-white hover:bg-terracotta-700 disabled:opacity-70 transition"
+              >
+                {removingGame ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+                Sí, quitar juego
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Real BGG Search & Import Modal */}
       {addModalOpen && (

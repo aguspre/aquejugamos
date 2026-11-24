@@ -12,6 +12,7 @@ interface GameCardProps {
   owners?: UserSummary[];
   targetPlayers?: number;
   onSelect?: (game: Game) => void;
+  headerAction?: ReactNode;
   actionSlot?: ReactNode;
 }
 
@@ -44,6 +45,7 @@ export function GameCard({
   owners,
   targetPlayers,
   onSelect,
+  headerAction,
   actionSlot,
 }: GameCardProps) {
   const statusMeta = status ? STATUS_BADGE[status] : null;
@@ -123,6 +125,9 @@ export function GameCard({
               )}
             </p>
           </div>
+          {headerAction && (
+            <div className="card-elevated-action shrink-0">{headerAction}</div>
+          )}
         </header>
 
         {/* Semantic Metadata Pills */}

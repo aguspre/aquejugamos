@@ -623,6 +623,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       ensureRegistered();
       await libraryApi.removeItem(gameId);
       setLibrary((prev) => prev.filter((item) => item.id !== gameId));
+      void groupsApi
+        .list()
+        .then(({ groups: refreshed }) => setGroups(refreshed.map(mapGroup)))
+        .catch(() => {
+          // Ignore background count refresh errors
+        });
     },
     [ensureRegistered],
   );
