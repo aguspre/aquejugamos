@@ -203,6 +203,25 @@ export function AppShell({ children }: AppShellProps) {
           </div>
         </nav>
 
+        {/* Powered by BGG Attribution (above User Footer) */}
+        <div className="px-4 pb-3">
+          <a
+            href="https://boardgamegeek.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Powered by BoardGameGeek"
+            className="flex items-center justify-center rounded-xl bg-forest-900 px-3.5 py-2.5 shadow-2xs ring-1 ring-forest-700/60 hover:bg-forest-700 transition"
+          >
+            <img
+              src="/images/powered-by-bgg-reversed-rgb.svg"
+              alt="Powered by BGG"
+              width={135}
+              height={30}
+              className="h-6 w-auto"
+            />
+          </a>
+        </div>
+
         {/* User Footer */}
         <div className="p-4 border-t border-border space-y-2.5">
           {isAuthenticated ? (
@@ -451,6 +470,26 @@ export function AppShell({ children }: AppShellProps) {
             </div>
           )}
           {children}
+
+          {/* Mobile Powered by BGG Attribution */}
+          <footer className="mt-10 flex justify-center lg:hidden">
+            <a
+              href="https://boardgamegeek.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Powered by BoardGameGeek"
+              className="inline-flex items-center justify-center rounded-xl bg-forest-900 px-3.5 py-2 shadow-2xs ring-1 ring-forest-700/60 hover:bg-forest-700 transition"
+            >
+              <img
+                src="/images/powered-by-bgg-reversed-rgb.svg"
+                alt="Powered by BGG"
+                width={126}
+                height={28}
+                loading="lazy"
+                className="h-5.5 w-auto"
+              />
+            </a>
+          </footer>
         </div>
       </main>
 

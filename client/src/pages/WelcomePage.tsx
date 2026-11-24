@@ -8,47 +8,47 @@ import {
   Library,
   Loader2,
   LogOut,
-  Sparkles,
   Ticket,
   User as UserIcon,
   Users,
   Vote,
-} from 'lucide-react';
-import { useEffect, useState, type FormEvent } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ApiError } from '../api/client';
+} from "lucide-react";
+import { useEffect, useState, type FormEvent } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { ApiError } from "../api/client";
 import {
   authApi,
   groupsApi,
   sessionsApi,
   type InvitePreview,
-} from '../api/endpoints';
-import { AuthForm, type AuthFormMode } from '../components/auth/AuthForm';
-import { useAppState } from '../context/AppStateContext';
-import { useAuth } from '../context/AuthContext';
-import { formatSessionDate } from '../utils/formatDate';
+} from "../api/endpoints";
+import { AuthForm, type AuthFormMode } from "../components/auth/AuthForm";
+import { useAppState } from "../context/AppStateContext";
+import { useAuth } from "../context/AuthContext";
+import { formatSessionDate } from "../utils/formatDate";
 
 const PROJECT_PILLARS = [
   {
     icon: Library,
-    title: 'Ludoteca grupal + BGG',
+    title: "Ludoteca grupal + BGG",
     description:
-      'Sincronizá tu colección desde BoardGameGeek y unila con la de tus amigos en un solo catálogo.',
-    accentClass: 'bg-ochre-500/20 text-ochre-100 border-ochre-500/35',
+      "Sincronizá tu colección desde BoardGameGeek y unila con la de tus amigos en un solo catálogo.",
+    accentClass: "bg-ochre-500/20 text-ochre-100 border-ochre-500/35",
   },
   {
     icon: Vote,
-    title: 'Juntadas y votación',
+    title: "Juntadas y votación",
     description:
-      'Filtrá juegos compatibles según quiénes confirman y voten con voto simple, multi-voto o Top 3.',
-    accentClass: 'bg-terracotta-500/25 text-terracotta-100 border-terracotta-500/35',
+      "Filtrá juegos compatibles según quiénes confirman y voten con voto simple, multi-voto o Top 3.",
+    accentClass:
+      "bg-terracotta-500/25 text-terracotta-100 border-terracotta-500/35",
   },
   {
     icon: History,
-    title: 'Historial y estadísticas',
+    title: "Historial y estadísticas",
     description:
-      'Registrá partidas, puntajes y ganadores para saber qué títulos ven más mesa en tu grupo.',
-    accentClass: 'bg-teal-700/35 text-teal-100 border-teal-100/25',
+      "Registrá partidas, puntajes y ganadores para saber qué títulos ven más mesa en tu grupo.",
+    accentClass: "bg-teal-700/35 text-teal-100 border-teal-100/25",
   },
 ] as const;
 
@@ -65,16 +65,18 @@ export function WelcomePage() {
   } = useAuth();
   const { currentUser, refreshAll } = useAppState();
 
-  const groupInviteCode = searchParams.get('groupInvite')?.trim() || '';
-  const sessionInviteToken = searchParams.get('sessionInvite')?.trim() || '';
+  const groupInviteCode = searchParams.get("groupInvite")?.trim() || "";
+  const sessionInviteToken = searchParams.get("sessionInvite")?.trim() || "";
   const hasInvite = Boolean(groupInviteCode || sessionInviteToken);
 
-  const [authMode, setAuthMode] = useState<AuthFormMode>('signin');
-  const [invitePreview, setInvitePreview] = useState<InvitePreview | null>(null);
+  const [authMode, setAuthMode] = useState<AuthFormMode>("signin");
+  const [invitePreview, setInvitePreview] = useState<InvitePreview | null>(
+    null,
+  );
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
 
-  const [guestName, setGuestName] = useState('');
+  const [guestName, setGuestName] = useState("");
   const [guestSubmitting, setGuestSubmitting] = useState(false);
   const [guestError, setGuestError] = useState<string | null>(null);
   const [joiningRegistered, setJoiningRegistered] = useState(false);
@@ -107,7 +109,7 @@ export function WelcomePage() {
           setInviteError(
             err instanceof ApiError
               ? err.message
-              : 'No se pudo validar el link de invitación.',
+              : "No se pudo validar el link de invitación.",
           );
         }
       })
@@ -126,13 +128,17 @@ export function WelcomePage() {
       try {
         await groupsApi.join(groupInviteCode);
         await refreshAll();
-        if (invitePreview?.kind === 'group' && invitePreview.activeSession) {
-          navigate(`/sessions/${invitePreview.activeSession.id}`, { replace: true });
+        if (invitePreview?.kind === "group" && invitePreview.activeSession) {
+          navigate(`/sessions/${invitePreview.activeSession.id}`, {
+            replace: true,
+          });
           return;
         }
-        navigate('/sessions', { replace: true });
+        navigate("/sessions", { replace: true });
       } catch {
-        navigate(`/join/${encodeURIComponent(groupInviteCode)}`, { replace: true });
+        navigate(`/join/${encodeURIComponent(groupInviteCode)}`, {
+          replace: true,
+        });
       } finally {
         setJoiningRegistered(false);
       }
@@ -142,18 +148,21 @@ export function WelcomePage() {
     if (sessionInviteToken) {
       setJoiningRegistered(true);
       try {
-        const { session } = await sessionsApi.joinByToken(sessionInviteToken, 'going');
+        const { session } = await sessionsApi.joinByToken(
+          sessionInviteToken,
+          "going",
+        );
         await refreshAll();
         navigate(`/sessions/${session.id}`, { replace: true });
       } catch {
-        navigate('/sessions', { replace: true });
+        navigate("/sessions", { replace: true });
       } finally {
         setJoiningRegistered(false);
       }
       return;
     }
 
-    navigate('/sessions', { replace: true });
+    navigate("/sessions", { replace: true });
   };
 
   const handleAuthSuccess = () => {
@@ -161,14 +170,16 @@ export function WelcomePage() {
   };
 
   const handleContinueAsGuest = () => {
-    navigate('/sessions');
+    navigate("/sessions");
   };
 
   const handleInvitedGuestSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const trimmed = guestName.trim();
     if (trimmed.length < 2) {
-      setGuestError('Ingresá tu nombre (al menos 2 caracteres) para entrar a la juntada.');
+      setGuestError(
+        "Ingresá tu nombre (al menos 2 caracteres) para entrar a la juntada.",
+      );
       return;
     }
 
@@ -184,13 +195,13 @@ export function WelcomePage() {
       if (targetSessionId) {
         navigate(`/sessions/${targetSessionId}`, { replace: true });
       } else {
-        navigate('/sessions', { replace: true });
+        navigate("/sessions", { replace: true });
       }
     } catch (err) {
       setGuestError(
         err instanceof ApiError
           ? err.message
-          : 'No se pudo ingresar como invitado. Verificá la conexión.',
+          : "No se pudo ingresar como invitado. Verificá la conexión.",
       );
     } finally {
       setGuestSubmitting(false);
@@ -198,19 +209,19 @@ export function WelcomePage() {
   };
 
   const authHeading =
-    authMode === 'signin'
-      ? 'Iniciá sesión'
-      : authMode === 'signup'
-        ? 'Creá tu cuenta'
-        : 'Recuperar contraseña';
+    authMode === "signin"
+      ? "Iniciá sesión"
+      : authMode === "signup"
+        ? "Creá tu cuenta"
+        : "Recuperar contraseña";
 
   const authSubtitle = hasInvite
-    ? 'Iniciá sesión para sumarte con tu cuenta completa, o entrá abajo como invitado con tu nombre para votar.'
-    : authMode === 'signin'
-      ? 'Guardá tu ludoteca, sincronizá BGG y votá en las juntadas de tu grupo.'
-      : authMode === 'signup'
-        ? 'Sumá tus juegos de mesa y armá la próxima juntada en minutos.'
-        : 'Ingresá tu email y te enviaremos un enlace seguro para restablecerla.';
+    ? "Iniciá sesión para sumarte con tu cuenta completa, o entrá abajo como invitado con tu nombre para votar."
+    : authMode === "signin"
+      ? "Guardá tu ludoteca, sincronizá BGG y votá en las juntadas de tu grupo."
+      : authMode === "signup"
+        ? "Sumá tus juegos de mesa y armá la próxima juntada en minutos."
+        : "Ingresá tu email y te enviaremos un enlace seguro para restablecerla.";
 
   return (
     <div className="min-h-dvh grid grid-cols-1 lg:grid-cols-3 bg-canvas text-ink">
@@ -260,10 +271,21 @@ export function WelcomePage() {
               </div>
             </div>
 
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3.5 py-1.5 text-xs font-semibold text-white/90 backdrop-blur-md">
-              <Sparkles className="h-3.5 w-3.5 text-ochre-100" aria-hidden="true" />
-              <span>Integrado con BoardGameGeek</span>
-            </span>
+            <a
+              href="https://boardgamegeek.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Powered by BoardGameGeek"
+              className="inline-flex items-center rounded-xl border border-white/15 bg-[#0B1E17]/75 px-3 py-1.5 backdrop-blur-md hover:border-white/30 hover:bg-[#0E261D]/90 transition"
+            >
+              <img
+                src="/images/powered-by-bgg-reversed-rgb.svg"
+                alt="Powered by BGG"
+                width={126}
+                height={28}
+                className="h-5.5 w-auto"
+              />
+            </a>
           </header>
 
           {/* Main Project Pitch */}
@@ -272,10 +294,10 @@ export function WelcomePage() {
               <Users className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               <span>
                 {invitePreview
-                  ? invitePreview.kind === 'group'
+                  ? invitePreview.kind === "group"
                     ? `Invitación al grupo ${invitePreview.groupName}`
                     : `Invitación a ${invitePreview.sessionTitle}`
-                  : 'Tu grupo, tus juegos, una sola mesa'}
+                  : "Tu grupo, tus juegos, una sola mesa"}
               </span>
             </div>
 
@@ -284,9 +306,10 @@ export function WelcomePage() {
             </h1>
 
             <p className="text-sm sm:text-base xl:text-lg text-white/85 leading-relaxed max-w-xl">
-              Reuní las colecciones de juegos de mesa de tu grupo, armá juntadas con
-              confirmación de asistencia, cruzá automáticamente qué juegos encajan con
-              quienes van y voten en equipo antes de abrir las cajas.
+              Reuní las colecciones de juegos de mesa de tu grupo, armá juntadas
+              con confirmación de asistencia, cruzá automáticamente qué juegos
+              encajan con quienes van y voten en equipo antes de abrir las
+              cajas.
             </p>
           </div>
 
@@ -336,7 +359,10 @@ export function WelcomePage() {
             <div className="rounded-2xl border border-forest-200 bg-forest-50/90 p-4 space-y-2 shadow-2xs">
               {inviteLoading ? (
                 <div className="flex items-center gap-2 text-xs font-semibold text-forest-700">
-                  <Loader2 className="h-4 w-4 animate-spin shrink-0" aria-hidden="true" />
+                  <Loader2
+                    className="h-4 w-4 animate-spin shrink-0"
+                    aria-hidden="true"
+                  />
                   <span>Verificando link de invitación…</span>
                 </div>
               ) : inviteError ? (
@@ -344,7 +370,10 @@ export function WelcomePage() {
                   role="alert"
                   className="flex items-start gap-2 text-xs font-semibold text-terracotta-700"
                 >
-                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" aria-hidden="true" />
+                  <AlertCircle
+                    className="h-4 w-4 shrink-0 mt-0.5"
+                    aria-hidden="true"
+                  />
                   <span>{inviteError}</span>
                 </div>
               ) : invitePreview ? (
@@ -352,32 +381,39 @@ export function WelcomePage() {
                   <div className="inline-flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-forest-700">
                     <Ticket className="h-3.5 w-3.5" aria-hidden="true" />
                     <span>
-                      {invitePreview.kind === 'group'
-                        ? 'Invitación a un grupo'
-                        : 'Invitación a una juntada'}
+                      {invitePreview.kind === "group"
+                        ? "Invitación a un grupo"
+                        : "Invitación a una juntada"}
                     </span>
                   </div>
 
                   <p className="font-[var(--font-display)] text-lg font-bold text-ink leading-snug">
-                    {invitePreview.kind === 'group'
+                    {invitePreview.kind === "group"
                       ? invitePreview.groupName
                       : invitePreview.sessionTitle}
                   </p>
 
-                  {invitePreview.kind === 'group' && invitePreview.activeSession && (
-                    <p className="flex items-center gap-1.5 text-xs font-semibold text-forest-800">
-                      <CalendarDays className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                      <span className="truncate">
-                        Próxima juntada: {invitePreview.activeSession.title}
-                      </span>
-                    </p>
-                  )}
+                  {invitePreview.kind === "group" &&
+                    invitePreview.activeSession && (
+                      <p className="flex items-center gap-1.5 text-xs font-semibold text-forest-800">
+                        <CalendarDays
+                          className="h-3.5 w-3.5 shrink-0"
+                          aria-hidden="true"
+                        />
+                        <span className="truncate">
+                          Próxima juntada: {invitePreview.activeSession.title}
+                        </span>
+                      </p>
+                    )}
 
-                  {invitePreview.kind === 'session' && (
+                  {invitePreview.kind === "session" && (
                     <p className="flex items-center gap-1.5 text-xs font-semibold text-forest-800 num-tabular">
-                      <CalendarDays className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      <CalendarDays
+                        className="h-3.5 w-3.5 shrink-0"
+                        aria-hidden="true"
+                      />
                       <span>
-                        {invitePreview.groupName} ·{' '}
+                        {invitePreview.groupName} ·{" "}
                         {formatSessionDate(invitePreview.scheduledAt)}
                       </span>
                     </p>
@@ -400,8 +436,8 @@ export function WelcomePage() {
                 </h2>
                 <p className="text-sm text-ink-muted">
                   {hasInvite
-                    ? 'Confirmá para sumarte a esta invitación con tu cuenta.'
-                    : 'Tu ludoteca, tus grupos y tus próximas juntadas están listos para continuar.'}
+                    ? "Confirmá para sumarte a esta invitación con tu cuenta."
+                    : "Tu ludoteca, tus grupos y tus próximas juntadas están listos para continuar."}
                 </p>
               </div>
 
@@ -441,10 +477,15 @@ export function WelcomePage() {
                   className="w-full inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-forest-600 px-4 text-sm font-bold text-white shadow-xs hover:bg-forest-700 disabled:opacity-60 transition"
                 >
                   {joiningRegistered && (
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    <Loader2
+                      className="h-4 w-4 animate-spin"
+                      aria-hidden="true"
+                    />
                   )}
                   <span>
-                    {hasInvite ? 'Aceptar invitación y entrar' : 'Ir a mis juntadas'}
+                    {hasInvite
+                      ? "Aceptar invitación y entrar"
+                      : "Ir a mis juntadas"}
                   </span>
                   <ArrowRight className="h-4 w-4" aria-hidden="true" />
                 </button>
@@ -476,9 +517,9 @@ export function WelcomePage() {
                       Entrar como invitado para votar
                     </h2>
                     <p className="text-xs text-ink-muted leading-snug">
-                      Elegí cómo querés aparecer en la mesa. Podrás confirmar asistencia,
-                      proponer juegos y votar, con el resto de las secciones bloqueadas
-                      hasta registrarte.
+                      Elegí cómo querés aparecer en la mesa. Podrás confirmar
+                      asistencia, proponer juegos y votar, con el resto de las
+                      secciones bloqueadas hasta registrarte.
                     </p>
                   </div>
 
@@ -530,7 +571,10 @@ export function WelcomePage() {
                     className="w-full inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-terracotta-500 px-4 text-sm font-bold text-white shadow-xs hover:bg-terracotta-600 disabled:opacity-60 transition"
                   >
                     {guestSubmitting ? (
-                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      <Loader2
+                        className="h-4 w-4 animate-spin"
+                        aria-hidden="true"
+                      />
                     ) : (
                       <Vote className="h-4 w-4" aria-hidden="true" />
                     )}
@@ -565,7 +609,7 @@ export function WelcomePage() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => navigate('/sessions')}
+                    onClick={() => navigate("/sessions")}
                     className="shrink-0 inline-flex items-center gap-1 rounded-lg bg-forest-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-forest-700 transition"
                   >
                     <span>Volver</span>
@@ -612,12 +656,15 @@ export function WelcomePage() {
                     className="w-full inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-border-strong bg-canvas-subtle/80 px-4 text-sm font-bold text-ink hover:bg-canvas-deep hover:border-ink-subtle/40 transition"
                   >
                     <span>Continuar como invitado</span>
-                    <ArrowRight className="h-4 w-4 text-forest-600" aria-hidden="true" />
+                    <ArrowRight
+                      className="h-4 w-4 text-forest-600"
+                      aria-hidden="true"
+                    />
                   </button>
 
                   <p className="text-center text-xs text-ink-subtle leading-relaxed">
-                    Modo invitado limitado: para crear grupos, importar tu ludoteca o ver
-                    el historial necesitás iniciar sesión.
+                    Modo invitado limitado: para crear grupos, importar tu
+                    ludoteca o ver el historial necesitás iniciar sesión.
                   </p>
                 </div>
               )}
