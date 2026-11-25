@@ -31,6 +31,7 @@ export function HistoryPage() {
   const { isAuthenticated, backendUser, loading: authLoading } = useAuth();
   const {
     isBootstrapping,
+    isPlayLogsLoaded,
     isPlayLogsLoading,
     playLogsError,
     isGroupStatsLoading,
@@ -219,7 +220,9 @@ export function HistoryPage() {
               </span>
               <button
                 type="button"
-                onClick={() => void ensureGroupStatsLoaded(activeGroup.id, true)}
+                onClick={() =>
+                  void ensureGroupStatsLoaded(activeGroup.id, true)
+                }
                 className="inline-flex min-h-8 items-center gap-1.5 rounded-lg bg-terracotta-500 px-3 text-xs font-bold text-white hover:bg-terracotta-600 transition"
               >
                 <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
@@ -592,7 +595,17 @@ export function HistoryPage() {
               })}
             </div>
 
-            {!playLogsError && !isPlayLogsLoading && visiblePlayLogs.length === 0 && (
+            {(isPlayLogsLoading || (!isPlayLogsLoaded && !playLogsError)) &&
+              visiblePlayLogs.length === 0 && (
+                <div className="rounded-2xl border border-border bg-surface/70 p-8 text-center text-sm font-medium text-ink-muted animate-pulse">
+                  Cargando historial de partidas…
+                </div>
+              )}
+
+            {!playLogsError &&
+              !isPlayLogsLoading &&
+              isPlayLogsLoaded &&
+              visiblePlayLogs.length === 0 && (
               <div className="rounded-2xl border border-dashed border-border-strong bg-surface/70 p-10 text-center space-y-2">
                 <Dices
                   className="mx-auto h-8 w-8 text-ink-subtle"

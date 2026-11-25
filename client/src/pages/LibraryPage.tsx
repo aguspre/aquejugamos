@@ -77,6 +77,7 @@ export function LibraryPage() {
   const {
     currentUser,
     isBootstrapping,
+    isLibraryLoaded,
     isLibraryLoading,
     libraryError,
     library,
@@ -602,7 +603,9 @@ export function LibraryPage() {
       )}
 
       {/* Loading / Empty Library State */}
-      {isBootstrapping || (isLibraryLoading && library.length === 0) ? (
+      {isBootstrapping ||
+      (!isLibraryLoaded && !libraryError && library.length === 0) ||
+      (isLibraryLoading && library.length === 0) ? (
         <PageLoadingSkeleton variant="library" />
       ) : libraryError && library.length === 0 ? (
         <div
