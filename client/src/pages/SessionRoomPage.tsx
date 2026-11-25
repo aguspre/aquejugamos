@@ -235,8 +235,8 @@ export function SessionRoomPage() {
         const cached = sessionsListRef.current.find((s) => s.id === id);
         const isFreshDetail = Boolean(
           cached?.isDetailLoaded &&
-            cached.detailLoadedAt &&
-            Date.now() - cached.detailLoadedAt < 15_000,
+          cached.detailLoadedAt &&
+          Date.now() - cached.detailLoadedAt < 15_000,
         );
         if (cached && isFreshDetail) {
           loadedSession = cached;
@@ -573,9 +573,7 @@ export function SessionRoomPage() {
     rsvpSeqRef.current += 1;
   };
 
-  const runSessionAction = async (
-    action: () => Promise<GameSession>,
-  ) => {
+  const runSessionAction = async (action: () => Promise<GameSession>) => {
     setBusyAction(true);
     setErrorMsg(null);
     setActionNotice(null);
@@ -2099,7 +2097,9 @@ export function SessionRoomPage() {
               role="alert"
               className="rounded-2xl border border-terracotta-200 bg-terracotta-50 px-6 py-8 text-center space-y-3"
             >
-              <p className="text-sm font-bold text-terracotta-700">{poolError}</p>
+              <p className="text-sm font-bold text-terracotta-700">
+                {poolError}
+              </p>
               <button
                 type="button"
                 onClick={() => setPoolRetryToken((t) => t + 1)}

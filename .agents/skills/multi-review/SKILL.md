@@ -29,14 +29,15 @@ puntos ciegos.
 Invocá en **un mismo turno** (en paralelo con `invoke_subagent`) únicamente los
 especialistas relevantes al alcance:
 
-| Área modificada | Subagentes a invocar en paralelo |
-| :--- | :--- |
-| Solo `client/` | `frontend-ui-reviewer` + `security-reviewer` |
-| Solo `server/` | `backend-db-reviewer` + `security-reviewer` |
+| Área modificada                             | Subagentes a invocar en paralelo                                     |
+| :------------------------------------------ | :------------------------------------------------------------------- |
+| Solo `client/`                              | `frontend-ui-reviewer` + `security-reviewer`                         |
+| Solo `server/`                              | `backend-db-reviewer` + `security-reviewer`                          |
 | Ambos (`client/` + `server/`) o PR completo | `security-reviewer` + `backend-db-reviewer` + `frontend-ui-reviewer` |
-| Solo config / scripts / `.agents/` | `pr-reviewer` (revisión simple) |
+| Solo config / scripts / `.agents/`          | `pr-reviewer` (revisión simple)                                      |
 
 En el `Prompt` de cada subagente indicá claramente:
+
 - Los archivos modificados y el `git diff` (si es acotado); en PRs de GitHub,
   incluí los archivos y el diff obtenido con `pull_request_read` en el Paso 1
   (los subagentes tienen `inheritMcp: false` para ahorrar contexto).

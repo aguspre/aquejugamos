@@ -1,0 +1,17 @@
+.git
+.gitignore
+.neon
+node_modules
+client/node_modules
+server/node_modules
+client/dist
+server/dist
+.env
+.env.*
+server/.env
+server/.env.*
+client/.env
+client/.env.*
+serviceAccountKey.json
+*.log
+.DS_Store
