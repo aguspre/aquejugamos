@@ -100,7 +100,7 @@ export function GameDetailDrawer({
       {/* Drawer / Sheet */}
       <div className="relative z-10 flex max-h-[90dvh] sm:max-h-dvh w-full sm:max-w-md flex-col overflow-hidden rounded-t-3xl sm:rounded-t-none sm:rounded-l-3xl border-t sm:border-t-0 sm:border-l border-border bg-surface shadow-[var(--shadow-floating)]">
         {/* Top Image Banner */}
-        <div className="relative aspect-[16/9] w-full shrink-0 bg-canvas-subtle">
+        <div className="relative h-44 sm:h-52 w-full shrink-0 overflow-hidden bg-canvas-subtle">
           <img
             src={game.imageUrl}
             alt={`Portada de ${game.name}`}
