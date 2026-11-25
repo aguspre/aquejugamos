@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -97,8 +98,10 @@ export interface CreatePlayLogInput {
 interface AppStateContextValue {
   currentUser: UserSummary;
   isBootstrapping: boolean;
+  isLibraryLoaded: boolean;
   isLibraryLoading: boolean;
   libraryError: string | null;
+  isPlayLogsLoaded: boolean;
   isPlayLogsLoading: boolean;
   playLogsError: string | null;
   isGroupStatsLoading: boolean;
@@ -351,8 +354,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [backendUser, firebaseUser]);
 
   const [isBootstrapping, setIsBootstrapping] = useState(true);
+  const [isLibraryLoaded, setIsLibraryLoaded] = useState(false);
   const [isLibraryLoading, setIsLibraryLoading] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [isPlayLogsLoaded, setIsPlayLogsLoaded] = useState(false);
   const [isPlayLogsLoading, setIsPlayLogsLoading] = useState(false);
   const [playLogsError, setPlayLogsError] = useState<string | null>(null);
   const [isGroupStatsLoading, setIsGroupStatsLoading] = useState(false);
@@ -517,6 +522,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           setLibrary(mapped);
           setLibraryCount(mapped.length);
           libraryLoadedRef.current = true;
+          setIsLibraryLoaded(true);
         } catch (err) {
           if (authEpochRef.current !== epoch || librarySeqRef.current !== seq) {
             return;
@@ -566,6 +572,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           }
           setPlayLogs(res.playLogs.map(mapPlayLog));
           playLogsLoadedRef.current = true;
+          setIsPlayLogsLoaded(true);
         } catch (err) {
           if (
             authEpochRef.current !== epoch ||
@@ -686,7 +693,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setPlayLogs([]);
       setActiveGroupStats(null);
       libraryLoadedRef.current = false;
+      setIsLibraryLoaded(false);
       playLogsLoadedRef.current = false;
+      setIsPlayLogsLoaded(false);
       statsCacheByGroupRef.current.clear();
       setIsBootstrapping(false);
       return;
@@ -737,18 +746,27 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       : "anon";
   const prevAuthIdentityRef = useRef(authIdentityKey);
 
-  // Hydrate immediately from AuthContext's single /api/auth/bootstrap response (0 extra network calls!)
-  useEffect(() => {
+  // CRITICAL: Run identity-transition invalidation inside useLayoutEffect so it
+  // executes BEFORE any child component's passive useEffect (e.g. LibraryPage,
+  // HistoryPage, SessionRoomPage) fires ensureLibraryLoaded / ensurePlayLogsLoaded.
+  // Also only invalidate/reset when leaving a non-"anon" session (sign-out,
+  // guest -> registered, or user A -> user B), never on initial "anon" -> "user" load.
+  useLayoutEffect(() => {
     if (authLoading) return;
+    if (prevAuthIdentityRef.current === authIdentityKey) return;
 
-    if (prevAuthIdentityRef.current !== authIdentityKey) {
-      prevAuthIdentityRef.current = authIdentityKey;
+    const prevIdentity = prevAuthIdentityRef.current;
+    prevAuthIdentityRef.current = authIdentityKey;
+
+    if (prevIdentity !== "anon") {
       authEpochRef.current += 1;
       appliedBootstrapVersionRef.current = 0;
       libraryLoadedRef.current = false;
+      setIsLibraryLoaded(false);
       librarySeqRef.current += 1;
       libraryInFlightRef.current = null;
       playLogsLoadedRef.current = false;
+      setIsPlayLogsLoaded(false);
       playLogsSeqRef.current += 1;
       playLogsInFlightRef.current = null;
       statsCacheByGroupRef.current.clear();
@@ -766,6 +784,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setPlayLogs([]);
       setActiveGroupStats(null);
     }
+  }, [authLoading, authIdentityKey, commitLibrary, commitSessions]);
+
+  // Hydrate immediately from AuthContext's single /api/auth/bootstrap response (0 extra network calls!)
+  useEffect(() => {
+    if (authLoading) return;
 
     if (
       isAuthenticated &&
@@ -1748,8 +1771,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       value={{
         currentUser,
         isBootstrapping,
+        isLibraryLoaded,
         isLibraryLoading,
         libraryError,
+        isPlayLogsLoaded,
         isPlayLogsLoading,
         playLogsError,
         isGroupStatsLoading,
