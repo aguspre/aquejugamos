@@ -606,20 +606,20 @@ export function HistoryPage() {
               !isPlayLogsLoading &&
               isPlayLogsLoaded &&
               visiblePlayLogs.length === 0 && (
-              <div className="rounded-2xl border border-dashed border-border-strong bg-surface/70 p-10 text-center space-y-2">
-                <Dices
-                  className="mx-auto h-8 w-8 text-ink-subtle"
-                  aria-hidden="true"
-                />
-                <p className="font-[var(--font-display)] text-lg font-bold text-ink">
-                  Aún no hay partidas registradas
-                </p>
-                <p className="text-sm text-ink-muted">
-                  Tocá <strong>Registrar partida</strong> cuando terminen su
-                  próxima mesa.
-                </p>
-              </div>
-            )}
+                <div className="rounded-2xl border border-dashed border-border-strong bg-surface/70 p-10 text-center space-y-2">
+                  <Dices
+                    className="mx-auto h-8 w-8 text-ink-subtle"
+                    aria-hidden="true"
+                  />
+                  <p className="font-[var(--font-display)] text-lg font-bold text-ink">
+                    Aún no hay partidas registradas
+                  </p>
+                  <p className="text-sm text-ink-muted">
+                    Tocá <strong>Registrar partida</strong> cuando terminen su
+                    próxima mesa.
+                  </p>
+                </div>
+              )}
           </section>
         </>
       )}
