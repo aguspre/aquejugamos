@@ -164,6 +164,7 @@ export async function assertSessionAccess(
   scope?: SessionAccessScope,
 ) {
   const session = await prisma.session.findUnique({
+    relationLoadStrategy: 'join',
     where: { id: sessionId },
     include: {
       participants: {
@@ -441,45 +442,95 @@ export async function listUserSessions(
       await assertGroupMember(userId, query.groupId);
     }
 
-    // Roll over any active recurring series in the user's groups whose occurrence passed
-    // (throttled per user/group for 60s to avoid extra NOT EXISTS queries on every GET)
     const rolloverKey = `${userId}:${query.groupId ?? '*'}`;
-    if (shouldCheckSeriesRollover(rolloverKey)) {
-      const rolloverCutoff = new Date(Date.now() - SERIES_ROLLOVER_GRACE_MS);
-      const staleSeries = await prisma.sessionSeries.findMany({
-        where: {
-          isActive: true,
-          ...(query.groupId ? { groupId: query.groupId } : {}),
-          group: { members: { some: { userId } } },
-          NOT: {
-            sessions: {
-              some: {
-                status: { in: ACTIVE_SESSION_STATUSES },
-                scheduledAt: { gt: rolloverCutoff },
-              },
-            },
-          },
-        },
-        select: { id: true },
-        take: 10,
-      });
-
-      for (const s of staleSeries) {
-        await ensureActiveSeriesSession(s.id);
-      }
-    }
+    const checkRollover = shouldCheckSeriesRollover(rolloverKey);
 
     accessOr = [
       { hostId: userId, groupId: null },
       { participants: { some: { userId } } },
       { group: { members: { some: { userId } } } },
     ];
+
+    const sessionQueryArgs = {
+      relationLoadStrategy: 'join',
+      where: {
+        ...(query.groupId ? { groupId: query.groupId } : {}),
+        ...(query.status ? { status: query.status } : {}),
+        OR: accessOr,
+      },
+      include: {
+        group: {
+          select: {
+            id: true,
+            name: true,
+            members: {
+              where: { userId },
+              select: { role: true },
+            },
+          },
+        },
+        series: { select: SERIES_SUMMARY_SELECT },
+        host: { select: USER_SUMMARY_SELECT },
+        participants: {
+          include: { user: { select: USER_SUMMARY_SELECT } },
+          orderBy: { respondedAt: 'asc' },
+        },
+        proposals: {
+          include: {
+            game: {
+              select: {
+                id: true,
+                name: true,
+                thumbnailUrl: true,
+                playingTimeMinutes: true,
+              },
+            },
+            votes: { select: { userId: true, rank: true } },
+          },
+        },
+      },
+      orderBy: { scheduledAt: 'desc' },
+      take: 60,
+    } satisfies Prisma.SessionFindManyArgs;
+
+    const rolloverCutoff = new Date(Date.now() - SERIES_ROLLOVER_GRACE_MS);
+    const [sessionsInitial, staleSeries] = await Promise.all([
+      prisma.session.findMany(sessionQueryArgs),
+      checkRollover
+        ? prisma.sessionSeries.findMany({
+            where: {
+              isActive: true,
+              ...(query.groupId ? { groupId: query.groupId } : {}),
+              group: { members: { some: { userId } } },
+              NOT: {
+                sessions: {
+                  some: {
+                    status: { in: ACTIVE_SESSION_STATUSES },
+                    scheduledAt: { gt: rolloverCutoff },
+                  },
+                },
+              },
+            },
+            select: { id: true },
+            take: 10,
+          })
+        : Promise.resolve([]),
+    ]);
+
+    let sessions = sessionsInitial;
+    if (staleSeries.length > 0) {
+      for (const s of staleSeries) {
+        await ensureActiveSeriesSession(s.id);
+      }
+      sessions = await prisma.session.findMany(sessionQueryArgs);
+    }
+
+    return formatSessionListItems(sessions, userId, scope);
   }
 
   const sessions = await prisma.session.findMany({
     relationLoadStrategy: 'join',
     where: {
-      ...(query.groupId && !scope?.isGuest ? { groupId: query.groupId } : {}),
       ...(query.status ? { status: query.status } : {}),
       OR: accessOr,
     },
@@ -517,6 +568,41 @@ export async function listUserSessions(
     orderBy: { scheduledAt: 'desc' },
     take: 60,
   });
+
+  return formatSessionListItems(sessions, userId, scope);
+}
+
+function formatSessionListItems(
+  sessions: Prisma.SessionGetPayload<{
+    include: {
+      group: {
+        select: {
+          id: true;
+          name: true;
+          members: { select: { role: true } };
+        };
+      };
+      series: { select: typeof SERIES_SUMMARY_SELECT };
+      host: { select: typeof USER_SUMMARY_SELECT };
+      participants: { include: { user: { select: typeof USER_SUMMARY_SELECT } } };
+      proposals: {
+        include: {
+          game: {
+            select: {
+              id: true;
+              name: true;
+              thumbnailUrl: true;
+              playingTimeMinutes: true;
+            };
+          };
+          votes: { select: { userId: true; rank: true } };
+        };
+      };
+    };
+  }>[],
+  userId: string,
+  scope?: SessionAccessScope,
+) {
 
   return sessions.map((session) => {
     const scoredAll = session.proposals.map((p) => ({
@@ -1491,14 +1577,58 @@ export async function getSessionCombinedPool(
   query: SessionPoolQuery,
   scope?: SessionAccessScope,
 ) {
-  await assertSessionAccess(userId, sessionId, scope);
+  const [session, existingProposals] = await Promise.all([
+    prisma.session.findUnique({
+      relationLoadStrategy: 'join',
+      where: { id: sessionId },
+      select: {
+        id: true,
+        groupId: true,
+        hostId: true,
+        participants: {
+          where: {
+            OR: [{ userId }, { rsvp: RsvpStatus.going }],
+          },
+          select: { userId: true, rsvp: true },
+        },
+        group: {
+          select: {
+            id: true,
+            members: {
+              where: { userId },
+              select: { role: true },
+            },
+          },
+        },
+      },
+    }),
+    prisma.sessionProposal.findMany({
+      where: { sessionId },
+      select: { gameId: true, status: true },
+    }),
+  ]);
 
-  const goingParticipants = await prisma.sessionParticipant.findMany({
-    where: { sessionId, rsvp: RsvpStatus.going },
-    select: { userId: true },
-  });
+  if (!session) {
+    throw notFound('Juntada no encontrada', 'SESSION_NOT_FOUND');
+  }
 
-  const goingUserIds = goingParticipants.map((p) => p.userId);
+  const isGroupMember = (session.group?.members.length ?? 0) > 0;
+  const isHost =
+    session.hostId === userId && (!session.groupId || isGroupMember);
+  const isParticipant = session.participants.some((p) => p.userId === userId);
+  const isInvitedGuest = Boolean(
+    scope?.isGuest &&
+      ((scope.guestGroupId && session.groupId === scope.guestGroupId) ||
+        (scope.guestSessionId && session.id === scope.guestSessionId)),
+  );
+
+  if (!isHost && !isParticipant && !isGroupMember && !isInvitedGuest) {
+    throw forbidden('No tenés acceso a esta juntada', 'SESSION_ACCESS_DENIED');
+  }
+
+  const goingUserIds = session.participants
+    .filter((p) => p.rsvp === RsvpStatus.going)
+    .map((p) => p.userId);
   const confirmedCount = goingUserIds.length;
 
   if (confirmedCount === 0) {
@@ -1555,43 +1685,75 @@ export async function getSessionCombinedPool(
     gameWhere.AND = gameAnd;
   }
 
-  const [uniqueGames, existingProposals] = await Promise.all([
-    prisma.game.findMany({
-      relationLoadStrategy: 'join',
-      where: {
-        ...gameWhere,
-        userGames: {
-          some: {
-            userId: { in: goingUserIds },
-            status: UserGameStatus.owned,
+  const uniqueGames = await prisma.game.findMany({
+    relationLoadStrategy: 'join',
+    where: {
+      ...gameWhere,
+      userGames: {
+        some: {
+          userId: { in: goingUserIds },
+          status: UserGameStatus.owned,
+        },
+      },
+    },
+    select: {
+      id: true,
+      bggId: true,
+      name: true,
+      yearPublished: true,
+      imageUrl: true,
+      thumbnailUrl: true,
+      minPlayers: true,
+      maxPlayers: true,
+      bestPlayers: true,
+      playingTimeMinutes: true,
+      weight: true,
+      bggRating: true,
+      isExpansion: true,
+      baseGameBggId: true,
+      mechanics: {
+        select: {
+          mechanic: {
+            select: { name: true },
           },
         },
       },
-      include: {
-        ...GAME_WITH_MECHANICS_INCLUDE,
-        userGames: {
-          where: {
-            userId: { in: goingUserIds },
-            status: UserGameStatus.owned,
-          },
-          select: {
-            user: { select: USER_SUMMARY_SELECT },
-          },
+      userGames: {
+        where: {
+          userId: { in: goingUserIds },
+          status: UserGameStatus.owned,
+        },
+        select: {
+          user: { select: USER_SUMMARY_SELECT },
         },
       },
-    }),
-    prisma.sessionProposal.findMany({
-      where: { sessionId },
-      select: { gameId: true, status: true },
-    }),
-  ]);
+    },
+  });
 
   const proposalStatusByGameId = new Map(
     existingProposals.map((p) => [p.gameId, p.status]),
   );
   const ownedRows: { user: OwnerSummary; game: PoolGameInput }[] = [];
   for (const game of uniqueGames) {
-    const formattedGame = formatGame(game);
+    const formattedGame: PoolGameInput = {
+      id: game.id,
+      bggId: game.bggId,
+      name: game.name,
+      yearPublished: game.yearPublished,
+      imageUrl: game.imageUrl,
+      thumbnailUrl: game.thumbnailUrl,
+      minPlayers: game.minPlayers,
+      maxPlayers: game.maxPlayers,
+      bestPlayers: game.bestPlayers,
+      playingTimeMinutes: game.playingTimeMinutes,
+      weight: decimalToNumber(game.weight),
+      bggRating: decimalToNumber(game.bggRating),
+      isExpansion: game.isExpansion,
+      baseGameBggId: game.baseGameBggId,
+      mechanics: game.mechanics
+        .map((gm) => gm.mechanic.name)
+        .sort((a, b) => a.localeCompare(b, 'es')),
+    };
     for (const ug of game.userGames) {
       ownedRows.push({
         user: ug.user,

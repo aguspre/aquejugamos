@@ -1,32 +1,12 @@
 ---
 name: neon-postgres
 description: >-
-  Guides and best practices for working with Lakebase Postgres on Neon:
-  connections, pooled vs direct, schema migrations, branching (including
-  schema-only, reset-from-parent, and branch-per-PR workflows), autoscaling,
-  scale-to-zero, instant restore, read replicas, IP allow lists, logical
-  replication, egress optimization, and Lakebase Search. Use when the work is
-  an existing DATABASE_URL, SQL, schema, inspect, or search. New backends, Auth,
-  files, Functions, and LLM calls go to the parent `neon` skill. Live queries,
-  reactive UIs, and realtime data go to `neon-realtime`. Also use for
-  "@neondatabase/serverless", "@neon/neon-js", "neon inspect db", "neon
-  postgres computes", "Neon branch", "schema-only branch", "reset branch",
-  "branch per PR", high database bills, network transfer or egress, Free plan
-  limits or a compute suspended over quota (SQLSTATE 53000, HTTP 402), SELECT *
-  optimization, query overfetching, "semantic search", "vector search", "full-text search", "BM25", or "hybrid
-  search".
+  Best practices for Neon Postgres: pooled vs direct connections, Prisma/SQL
+  migrations, branching, egress optimization (avoiding SELECT *), and
+  full-text/vector search. Use for DATABASE_URL, schema, or Neon DB performance.
 metadata:
-  parent: neon
   source: https://github.com/neondatabase/agent-skills/tree/main/skills/neon-postgres
 ---
-
-**FIRST**: Use the parent `neon` skill for a Neon overview, getting started with Neon, Neon development best practices, and more.
-
-If the `neon` skill is not installed, fetch it from https://neon.com/docs/ai/skills/neon/SKILL.md or install it with:
-
-```bash
-neon skills -s neon -y
-```
 
 # Lakebase Postgres
 

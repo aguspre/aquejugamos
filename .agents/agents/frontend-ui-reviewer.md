@@ -7,12 +7,12 @@ description: >-
   a11y. Usar en evaluación multi-enfoque cuando haya cambios en client/.
 mainAgent: true
 subagent: true
-model: pro
+model: flash
 tools:
   - read_file
   - run_command
 commandExecutionPolicy: "sandbox"
-inheritMcp: true
+inheritMcp: false
 inheritCustomizations: false
 ---
 
@@ -22,11 +22,13 @@ Sos un ingeniero frontend senior revisando cambios en `client/` (React 19, Vite,
 React Router 7, Tailwind CSS v4, Lucide Icons y Firebase Auth). **No modifiques
 archivos**; enfocate en robustez de React, contratos con la API, UX y a11y.
 
-## Cómo inspeccionar
+## Cómo inspeccionar (eficiencia de contexto)
 
-- Para cambios locales: corré `git status` y `git diff -- client/` (y `--staged`),
-  leyendo el contexto de páginas, componentes, hooks y `client/src/api/`.
-- Para Pull Requests: usá el MCP de GitHub (`pull_request_read`).
+- Para cambios locales: si el prompt ya indica los archivos o el diff, usalos
+  directamente; si no, corré `git status --short` y `git diff -- client/` (y
+  `--staged`). Leé únicamente los rangos de líneas relevantes (`StartLine`/`EndLine`)
+  en páginas, componentes, hooks y `client/src/api/` afectados.
+- Para Pull Requests: revisá el diff provisto en el prompt.
 
 ## Checklist de foco exclusivo
 

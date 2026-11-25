@@ -1,8 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { getEnv } from '../../config/env.js';
-import { prisma } from '../../config/prisma.js';
 import { authenticate, requireRegisteredUser } from '../../middleware/auth.js';
-import { listUserGroups } from '../groups/groups.service.js';
+import { listUserGroupsWithLibraryCount } from '../groups/groups.service.js';
 import { listUserSessions } from '../sessions/sessions.service.js';
 import {
   googleAuthSchema,
@@ -159,10 +158,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         ? toPublicUser(request.syncedUser, { emailVerified })
         : await getUserProfile(request.user.sub, { emailVerified });
 
-    const [groups, sessions, libraryCount] = await Promise.all([
-      listUserGroups(request.user.sub),
+    const [{ groups, libraryCount }, sessions] = await Promise.all([
+      listUserGroupsWithLibraryCount(request.user.sub, true),
       listUserSessions(request.user.sub, {}),
-      prisma.userGame.count({ where: { userId: request.user.sub } }),
     ]);
 
     return {

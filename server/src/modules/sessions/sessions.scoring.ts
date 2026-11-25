@@ -182,7 +182,7 @@ export interface PoolGameInput {
   bggRating: number | null;
   isExpansion: boolean;
   baseGameBggId: number | null;
-  mechanics: { id: string; bggId: number; name: string }[];
+  mechanics: ({ id: string; bggId: number; name: string } | string)[];
 }
 
 export interface OwnedGameRow {

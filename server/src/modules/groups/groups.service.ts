@@ -85,38 +85,100 @@ async function fetchAggregatedOwnedCounts(
     return { ownedCountByUserId, distinctGamesCountByGroupId };
   }
 
-  const [userCountRows, groupCountRows] = await Promise.all([
-    prisma.$queryRaw<{ userId: string; count: number }[]>`
-      SELECT ug.user_id AS "userId", COUNT(*)::int AS "count"
-      FROM user_games ug
-      INNER JOIN games g ON g.id = ug.game_id
-      WHERE ug.user_id = ANY(${userIds}::uuid[])
-        AND ug.status = 'owned'::"UserGameStatus"
-        AND g.is_expansion = false
-      GROUP BY ug.user_id
-    `,
-    prisma.$queryRaw<{ groupId: string; gamesCount: number }[]>`
-      SELECT gm.group_id AS "groupId", COUNT(DISTINCT ug.game_id)::int AS "gamesCount"
-      FROM group_members gm
-      INNER JOIN user_games ug
-        ON ug.user_id = gm.user_id
-       AND ug.status = 'owned'::"UserGameStatus"
-      INNER JOIN games g
-        ON g.id = ug.game_id
-       AND g.is_expansion = false
-      WHERE gm.group_id = ANY(${groupIds}::uuid[])
-      GROUP BY gm.group_id
-    `,
-  ]);
+  const rows = await prisma.$queryRaw<{ kind: string; id: string; count: number }[]>`
+    SELECT 'user' AS "kind", ug.user_id::text AS "id", COUNT(*)::int AS "count"
+    FROM user_games ug
+    INNER JOIN games g ON g.id = ug.game_id
+    WHERE ug.user_id = ANY(${userIds}::uuid[])
+      AND ug.status = 'owned'::"UserGameStatus"
+      AND g.is_expansion = false
+    GROUP BY ug.user_id
+    UNION ALL
+    SELECT 'group' AS "kind", gm.group_id::text AS "id", COUNT(DISTINCT ug.game_id)::int AS "count"
+    FROM group_members gm
+    INNER JOIN user_games ug
+      ON ug.user_id = gm.user_id
+     AND ug.status = 'owned'::"UserGameStatus"
+    INNER JOIN games g
+      ON g.id = ug.game_id
+     AND g.is_expansion = false
+    WHERE gm.group_id = ANY(${groupIds}::uuid[])
+    GROUP BY gm.group_id
+  `;
 
-  for (const row of userCountRows) {
-    ownedCountByUserId.set(row.userId, Number(row.count));
-  }
-  for (const row of groupCountRows) {
-    distinctGamesCountByGroupId.set(row.groupId, Number(row.gamesCount));
+  for (const row of rows) {
+    if (row.kind === 'user') {
+      ownedCountByUserId.set(row.id, Number(row.count));
+    } else {
+      distinctGamesCountByGroupId.set(row.id, Number(row.count));
+    }
   }
 
   return { ownedCountByUserId, distinctGamesCountByGroupId };
+}
+
+async function fetchUserGroupAggregatedCounts(
+  userId: string,
+  includeLibraryCount = false,
+): Promise<{
+  ownedCountByUserId: Map<string, number>;
+  distinctGamesCountByGroupId: Map<string, number>;
+  libraryCount: number;
+}> {
+  const ownedCountByUserId = new Map<string, number>();
+  const distinctGamesCountByGroupId = new Map<string, number>();
+  let libraryCount = 0;
+
+  const libraryUnion = includeLibraryCount
+    ? Prisma.sql`
+        UNION ALL
+        SELECT 'library' AS "kind", ${userId}::text AS "id", COUNT(*)::int AS "count"
+        FROM user_games
+        WHERE user_id = ${userId}::uuid
+      `
+    : Prisma.empty;
+
+  const rows = await prisma.$queryRaw<{ kind: string; id: string; count: number }[]>`
+    WITH my_groups AS (
+      SELECT group_id FROM group_members WHERE user_id = ${userId}::uuid
+    ),
+    my_members AS (
+      SELECT DISTINCT gm.user_id
+      FROM group_members gm
+      INNER JOIN my_groups mg ON mg.group_id = gm.group_id
+    )
+    SELECT 'user' AS "kind", ug.user_id::text AS "id", COUNT(*)::int AS "count"
+    FROM user_games ug
+    INNER JOIN my_members mm ON mm.user_id = ug.user_id
+    INNER JOIN games g ON g.id = ug.game_id
+    WHERE ug.status = 'owned'::"UserGameStatus"
+      AND g.is_expansion = false
+    GROUP BY ug.user_id
+    UNION ALL
+    SELECT 'group' AS "kind", gm.group_id::text AS "id", COUNT(DISTINCT ug.game_id)::int AS "count"
+    FROM group_members gm
+    INNER JOIN my_groups mg ON mg.group_id = gm.group_id
+    INNER JOIN user_games ug
+      ON ug.user_id = gm.user_id
+     AND ug.status = 'owned'::"UserGameStatus"
+    INNER JOIN games g
+      ON g.id = ug.game_id
+     AND g.is_expansion = false
+    GROUP BY gm.group_id
+    ${libraryUnion}
+  `;
+
+  for (const row of rows) {
+    if (row.kind === 'user') {
+      ownedCountByUserId.set(row.id, Number(row.count));
+    } else if (row.kind === 'group') {
+      distinctGamesCountByGroupId.set(row.id, Number(row.count));
+    } else if (row.kind === 'library') {
+      libraryCount = Number(row.count);
+    }
+  }
+
+  return { ownedCountByUserId, distinctGamesCountByGroupId, libraryCount };
 }
 
 async function formatGroupDto(groupId: string) {
@@ -163,35 +225,39 @@ export async function assertGroupAdmin(userId: string, groupId: string) {
 }
 
 export async function listUserGroups(userId: string) {
-  const memberships = await prisma.groupMember.findMany({
-    relationLoadStrategy: 'join',
-    where: { userId },
-    orderBy: { joinedAt: 'asc' },
-    include: {
-      group: {
-        include: GROUP_DTO_INCLUDE,
-      },
-    },
-  });
+  const { groups } = await listUserGroupsWithLibraryCount(userId, false);
+  return groups;
+}
 
-  if (memberships.length === 0) {
-    return [];
-  }
+export async function listUserGroupsWithLibraryCount(
+  userId: string,
+  includeLibraryCount = true,
+) {
+  const [memberships, { ownedCountByUserId, distinctGamesCountByGroupId, libraryCount }] =
+    await Promise.all([
+      prisma.groupMember.findMany({
+        relationLoadStrategy: 'join',
+        where: { userId },
+        orderBy: { joinedAt: 'asc' },
+        include: {
+          group: {
+            include: GROUP_DTO_INCLUDE,
+          },
+        },
+      }),
+      fetchUserGroupAggregatedCounts(userId, includeLibraryCount),
+    ]);
 
-  const groupIds = memberships.map((m) => m.group.id);
-  const allMemberIds = Array.from(
-    new Set(memberships.flatMap((m) => m.group.members.map((gm) => gm.userId))),
-  );
-  const { ownedCountByUserId, distinctGamesCountByGroupId } =
-    await fetchAggregatedOwnedCounts(groupIds, allMemberIds);
-
-  return memberships.map((m) =>
-    buildGroupDtoFromCounts(
-      m.group,
-      ownedCountByUserId,
-      distinctGamesCountByGroupId,
+  return {
+    groups: memberships.map((m) =>
+      buildGroupDtoFromCounts(
+        m.group,
+        ownedCountByUserId,
+        distinctGamesCountByGroupId,
+      ),
     ),
-  );
+    libraryCount,
+  };
 }
 
 export async function getGroupById(userId: string, groupId: string) {
