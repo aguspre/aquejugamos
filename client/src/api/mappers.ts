@@ -78,7 +78,7 @@ export interface ApiGame {
   bggRating: number | null;
   isExpansion: boolean;
   baseGameBggId: number | null;
-  mechanics?: ApiMechanic[];
+  mechanics?: (ApiMechanic | string)[];
 }
 
 export interface ApiLibraryItem {
@@ -408,7 +408,9 @@ export function mapGame(game: ApiGame): Game {
     bggRating: game.bggRating ?? 0,
     isExpansion: game.isExpansion,
     baseGameBggId: game.baseGameBggId ?? undefined,
-    mechanics: (game.mechanics ?? []).map((m) => m.name),
+    mechanics: (game.mechanics ?? []).map((m) =>
+      typeof m === 'string' ? m : m.name,
+    ),
   };
 }
 

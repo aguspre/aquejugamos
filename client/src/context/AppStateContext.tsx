@@ -1188,13 +1188,19 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     ): Promise<GameSession> => {
       ensureRegistered();
       const epoch = authEpochRef.current;
-      const snapshotBefore = sessionsRef.current.find((s) => s.id === sessionId);
+      const snapshotBefore = sessionsRef.current.find(
+        (s) => s.id === sessionId,
+      );
       const { sessionPatch } = await sessionsApi.update(sessionId, input);
       if (authEpochRef.current !== epoch) {
         if (snapshotBefore) {
           return applySessionMetadataPatch(snapshotBefore, sessionPatch);
         }
-        throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+        throw new ApiError(
+          401,
+          "SESSION_CHANGED",
+          "La sesión de usuario cambió.",
+        );
       }
       const existing =
         sessionsRef.current.find((s) => s.id === sessionId) ?? snapshotBefore;
@@ -1217,7 +1223,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     async (sessionId: string): Promise<GameSession> => {
       ensureRegistered();
       const epoch = authEpochRef.current;
-      const snapshotBefore = sessionsRef.current.find((s) => s.id === sessionId);
+      const snapshotBefore = sessionsRef.current.find(
+        (s) => s.id === sessionId,
+      );
       const { sessionPatch } = await sessionsApi.updateStatus(
         sessionId,
         "cancelled",
@@ -1226,7 +1234,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         if (snapshotBefore) {
           return applySessionStatusPatch(snapshotBefore, sessionPatch);
         }
-        throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+        throw new ApiError(
+          401,
+          "SESSION_CHANGED",
+          "La sesión de usuario cambió.",
+        );
       }
       const existing =
         sessionsRef.current.find((s) => s.id === sessionId) ?? snapshotBefore;
@@ -1249,7 +1261,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     async (sessionId: string): Promise<GameSession> => {
       ensureRegistered();
       const epoch = authEpochRef.current;
-      const snapshotBefore = sessionsRef.current.find((s) => s.id === sessionId);
+      const snapshotBefore = sessionsRef.current.find(
+        (s) => s.id === sessionId,
+      );
       const { sessionPatch } = await sessionsApi.updateStatus(
         sessionId,
         "voting",
@@ -1258,7 +1272,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         if (snapshotBefore) {
           return applySessionStatusPatch(snapshotBefore, sessionPatch);
         }
-        throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+        throw new ApiError(
+          401,
+          "SESSION_CHANGED",
+          "La sesión de usuario cambió.",
+        );
       }
       const existing =
         sessionsRef.current.find((s) => s.id === sessionId) ?? snapshotBefore;
@@ -1437,7 +1455,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           if (targetSession) {
             return applyRsvpDelta(targetSession, rsvpDelta);
           }
-          throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+          throw new ApiError(
+            401,
+            "SESSION_CHANGED",
+            "La sesión de usuario cambió.",
+          );
         }
         const latestBase =
           sessionsRef.current.find((s) => s.id === sessionId) ?? targetSession;
@@ -1470,13 +1492,19 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     ): Promise<GameSession> => {
       ensureSessionAccess();
       const epoch = authEpochRef.current;
-      const snapshotBefore = sessionsRef.current.find((s) => s.id === sessionId);
+      const snapshotBefore = sessionsRef.current.find(
+        (s) => s.id === sessionId,
+      );
       const delta = await sessionsApi.propose(sessionId, game.id, note);
       if (authEpochRef.current !== epoch) {
         if (snapshotBefore) {
           return applyProposalCreatedDelta(snapshotBefore, delta);
         }
-        throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+        throw new ApiError(
+          401,
+          "SESSION_CHANGED",
+          "La sesión de usuario cambió.",
+        );
       }
       const existing =
         sessionsRef.current.find((s) => s.id === sessionId) ?? snapshotBefore;
@@ -1502,7 +1530,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     ): Promise<{ session: GameSession; refundedVotesCount: number }> => {
       ensureSessionAccess();
       const epoch = authEpochRef.current;
-      const snapshotBefore = sessionsRef.current.find((s) => s.id === sessionId);
+      const snapshotBefore = sessionsRef.current.find(
+        (s) => s.id === sessionId,
+      );
       const delta = await sessionsApi.removeProposal(sessionId, proposalId);
       if (authEpochRef.current !== epoch) {
         if (snapshotBefore) {
@@ -1511,7 +1541,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
             refundedVotesCount: delta.refundedVotesCount ?? 0,
           };
         }
-        throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+        throw new ApiError(
+          401,
+          "SESSION_CHANGED",
+          "La sesión de usuario cambió.",
+        );
       }
       const existing =
         sessionsRef.current.find((s) => s.id === sessionId) ?? snapshotBefore;
@@ -1544,7 +1578,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     ): Promise<GameSession> => {
       ensureRegistered();
       const epoch = authEpochRef.current;
-      const snapshotBefore = sessionsRef.current.find((s) => s.id === sessionId);
+      const snapshotBefore = sessionsRef.current.find(
+        (s) => s.id === sessionId,
+      );
       const delta = await sessionsApi.updateProposalStatus(
         sessionId,
         proposalId,
@@ -1554,7 +1590,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         if (snapshotBefore) {
           return applyProposalStatusDelta(snapshotBefore, delta);
         }
-        throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+        throw new ApiError(
+          401,
+          "SESSION_CHANGED",
+          "La sesión de usuario cambió.",
+        );
       }
       const existing =
         sessionsRef.current.find((s) => s.id === sessionId) ?? snapshotBefore;
@@ -1617,7 +1657,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           if (targetSession) {
             return applyVotesSnapshot(targetSession, votes);
           }
-          throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+          throw new ApiError(
+            401,
+            "SESSION_CHANGED",
+            "La sesión de usuario cambió.",
+          );
         }
 
         const latestBase =
@@ -1659,7 +1703,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         if (current) {
           return applySessionStatusPatch(current, sessionPatch);
         }
-        throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+        throw new ApiError(
+          401,
+          "SESSION_CHANGED",
+          "La sesión de usuario cambió.",
+        );
       }
       const existing =
         sessionsRef.current.find((s) => s.id === sessionId) ?? current;

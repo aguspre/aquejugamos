@@ -37,10 +37,12 @@ especialistas relevantes al alcance:
 | Solo config / scripts / `.agents/` | `pr-reviewer` (revisión simple) |
 
 En el `Prompt` de cada subagente indicá claramente:
-- Si es un diff local (y qué archivos pertenecen a la tarea actual si hay otros
-  archivos sucios en el repo) o el número/repo de PR en GitHub.
-- Que NO modifique archivos y devuelva hallazgos clasificados como
-  `[BLOQUEANTE]`, `[SUGERENCIA]` o `[NIT]`.
+- Los archivos modificados y el `git diff` (si es acotado); en PRs de GitHub,
+  incluí los archivos y el diff obtenido con `pull_request_read` en el Paso 1
+  (los subagentes tienen `inheritMcp: false` para ahorrar contexto).
+- Que NO modifique archivos, que lea solo los rangos de líneas necesarios, y que
+  devuelva `[BLOQUEANTE]`, `[SUGERENCIA]` o `[NIT]` (o `APROBADO (sin hallazgos)`
+  en 1 línea si no hay problemas).
 
 ## Paso 3: Consolidar hallazgos
 

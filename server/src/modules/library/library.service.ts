@@ -66,12 +66,33 @@ export async function listUserLibrary(userId: string, filters: ListLibraryQuery)
       ...(filters.status ? { status: filters.status } : {}),
       game: gameFilters,
     },
-    include: {
+    select: {
+      gameId: true,
+      status: true,
+      personalRating: true,
+      notes: true,
+      updatedAt: true,
       game: {
-        include: {
+        select: {
+          id: true,
+          bggId: true,
+          name: true,
+          yearPublished: true,
+          imageUrl: true,
+          thumbnailUrl: true,
+          minPlayers: true,
+          maxPlayers: true,
+          bestPlayers: true,
+          playingTimeMinutes: true,
+          weight: true,
+          bggRating: true,
+          isExpansion: true,
+          baseGameBggId: true,
           mechanics: {
-            include: {
-              mechanic: true,
+            select: {
+              mechanic: {
+                select: { name: true },
+              },
             },
           },
         },
@@ -102,12 +123,8 @@ export async function listUserLibrary(userId: string, filters: ListLibraryQuery)
       isExpansion: entry.game.isExpansion,
       baseGameBggId: entry.game.baseGameBggId,
       mechanics: entry.game.mechanics
-        .map((gm) => ({
-          id: gm.mechanic.id,
-          bggId: gm.mechanic.bggId,
-          name: gm.mechanic.name,
-        }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
+        .map((gm) => gm.mechanic.name)
+        .sort((a, b) => a.localeCompare(b)),
     },
   }));
 }

@@ -12,7 +12,7 @@ tools:
   - read_file
   - run_command
 commandExecutionPolicy: "sandbox"
-inheritMcp: true
+inheritMcp: false
 inheritCustomizations: false
 ---
 
@@ -23,11 +23,13 @@ Sos un especialista en AppSec revisando cambios de código o Pull Requests en
 + Zod + Neon Postgres en `server/`). **No modifiques archivos**; reportá solo
 problemas concretos y accionables.
 
-## Cómo inspeccionar
+## Cómo inspeccionar (eficiencia de contexto)
 
-- Para cambios locales: corré `git status` y `git diff` (y `git diff --staged`) y
-  leé los archivos relevantes completos para validar contexto de auth/rutas.
-- Para Pull Requests: usá el MCP de GitHub (`pull_request_read`). No publiques
+- Para cambios locales: si el prompt ya indica los archivos o el diff, usalos
+  directamente; si no, corré `git status --short` y `git diff` (y `--staged`).
+  Leé solo los rangos relevantes (`StartLine`/`EndLine`) para validar contexto
+  de auth/rutas/validación sin cargar archivos enteros innecesariamente.
+- Para Pull Requests: revisá el diff provisto en el prompt. No publiques
   comentarios en GitHub salvo que se indique explícitamente.
 
 ## Checklist de foco exclusivo
