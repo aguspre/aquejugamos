@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { GroupRole, Prisma, UserGameStatus } from '@prisma/client';
+import { GroupRole, Prisma } from '@prisma/client';
 import { prisma } from '../../config/prisma.js';
 import { badRequest, forbidden, notFound } from '../../utils/errors.js';
 import { generateGroupInviteCode } from '../../utils/tokens.js';
@@ -42,69 +42,81 @@ type GroupWithMembersAndCounts = Prisma.GroupGetPayload<{
 
 async function fetchGroupWithMembersAndCounts(groupId: string) {
   return prisma.group.findUnique({
+    relationLoadStrategy: 'join',
     where: { id: groupId },
     include: GROUP_DTO_INCLUDE,
   });
 }
 
-function buildGroupDtoFromRows(
+function buildGroupDtoFromCounts(
   group: NonNullable<GroupWithMembersAndCounts>,
-  ownedGameIdsByUser: Map<string, Set<string>>,
+  ownedCountByUserId: Map<string, number>,
+  distinctGamesCountByGroupId: Map<string, number>,
 ) {
-  const uniqueGameIds = new Set<string>();
-
-  for (const m of group.members) {
-    const userGames = ownedGameIdsByUser.get(m.userId);
-    if (userGames) {
-      for (const gameId of userGames) {
-        uniqueGameIds.add(gameId);
-      }
-    }
-  }
-
   return {
     id: group.id,
     name: group.name,
     inviteCode: group.inviteCode,
     createdBy: group.createdBy,
     createdAt: group.createdAt,
-    gamesCount: uniqueGameIds.size,
+    gamesCount: distinctGamesCountByGroupId.get(group.id) ?? 0,
     sessionsCount: group._count.sessions,
     playLogsCount: group._count.playLogs,
     members: group.members.map((m) => ({
       role: m.role,
       joinedAt: m.joinedAt,
-      ownedGamesCount: ownedGameIdsByUser.get(m.userId)?.size ?? 0,
+      ownedGamesCount: ownedCountByUserId.get(m.userId) ?? 0,
       user: m.user,
     })),
   };
 }
 
-async function fetchOwnedGamesByUser(
+async function fetchAggregatedOwnedCounts(
+  groupIds: string[],
   userIds: string[],
-): Promise<Map<string, Set<string>>> {
-  const map = new Map<string, Set<string>>();
-  if (userIds.length === 0) return map;
+): Promise<{
+  ownedCountByUserId: Map<string, number>;
+  distinctGamesCountByGroupId: Map<string, number>;
+}> {
+  const ownedCountByUserId = new Map<string, number>();
+  const distinctGamesCountByGroupId = new Map<string, number>();
 
-  const ownedRows = await prisma.userGame.findMany({
-    where: {
-      userId: { in: userIds },
-      status: UserGameStatus.owned,
-      game: { isExpansion: false },
-    },
-    select: { userId: true, gameId: true },
-  });
-
-  for (const row of ownedRows) {
-    let set = map.get(row.userId);
-    if (!set) {
-      set = new Set<string>();
-      map.set(row.userId, set);
-    }
-    set.add(row.gameId);
+  if (groupIds.length === 0 || userIds.length === 0) {
+    return { ownedCountByUserId, distinctGamesCountByGroupId };
   }
 
-  return map;
+  const [userCountRows, groupCountRows] = await Promise.all([
+    prisma.$queryRaw<{ userId: string; count: number }[]>`
+      SELECT ug.user_id AS "userId", COUNT(*)::int AS "count"
+      FROM user_games ug
+      INNER JOIN games g ON g.id = ug.game_id
+      WHERE ug.user_id = ANY(${userIds}::uuid[])
+        AND ug.status = 'owned'::"UserGameStatus"
+        AND g.is_expansion = false
+      GROUP BY ug.user_id
+    `,
+    prisma.$queryRaw<{ groupId: string; gamesCount: number }[]>`
+      SELECT gm.group_id AS "groupId", COUNT(DISTINCT ug.game_id)::int AS "gamesCount"
+      FROM group_members gm
+      INNER JOIN user_games ug
+        ON ug.user_id = gm.user_id
+       AND ug.status = 'owned'::"UserGameStatus"
+      INNER JOIN games g
+        ON g.id = ug.game_id
+       AND g.is_expansion = false
+      WHERE gm.group_id = ANY(${groupIds}::uuid[])
+      GROUP BY gm.group_id
+    `,
+  ]);
+
+  for (const row of userCountRows) {
+    ownedCountByUserId.set(row.userId, Number(row.count));
+  }
+  for (const row of groupCountRows) {
+    distinctGamesCountByGroupId.set(row.groupId, Number(row.gamesCount));
+  }
+
+  return { ownedCountByUserId, distinctGamesCountByGroupId };
 }
 
 async function formatGroupDto(groupId: string) {
@@ -114,11 +126,17 @@ async function formatGroupDto(groupId: string) {
     throw notFound('Grupo no encontrado', 'GROUP_NOT_FOUND');
   }
 
-  const ownedGameIdsByUser = await fetchOwnedGamesByUser(
-    group.members.map((m) => m.userId),
-  );
+  const { ownedCountByUserId, distinctGamesCountByGroupId } =
+    await fetchAggregatedOwnedCounts(
+      [group.id],
+      group.members.map((m) => m.userId),
+    );
 
-  return buildGroupDtoFromRows(group, ownedGameIdsByUser);
+  return buildGroupDtoFromCounts(
+    group,
+    ownedCountByUserId,
+    distinctGamesCountByGroupId,
+  );
 }
 
 export async function assertGroupMember(userId: string, groupId: string) {
@@ -146,6 +164,7 @@ export async function assertGroupAdmin(userId: string, groupId: string) {
 
 export async function listUserGroups(userId: string) {
   const memberships = await prisma.groupMember.findMany({
+    relationLoadStrategy: 'join',
     where: { userId },
     orderBy: { joinedAt: 'asc' },
     include: {
@@ -159,13 +178,19 @@ export async function listUserGroups(userId: string) {
     return [];
   }
 
+  const groupIds = memberships.map((m) => m.group.id);
   const allMemberIds = Array.from(
     new Set(memberships.flatMap((m) => m.group.members.map((gm) => gm.userId))),
   );
-  const ownedGameIdsByUser = await fetchOwnedGamesByUser(allMemberIds);
+  const { ownedCountByUserId, distinctGamesCountByGroupId } =
+    await fetchAggregatedOwnedCounts(groupIds, allMemberIds);
 
   return memberships.map((m) =>
-    buildGroupDtoFromRows(m.group, ownedGameIdsByUser),
+    buildGroupDtoFromCounts(
+      m.group,
+      ownedCountByUserId,
+      distinctGamesCountByGroupId,
+    ),
   );
 }
 
@@ -180,11 +205,17 @@ export async function getGroupById(userId: string, groupId: string) {
     throw forbidden('No pertenecés a este grupo', 'NOT_GROUP_MEMBER');
   }
 
-  const ownedGameIdsByUser = await fetchOwnedGamesByUser(
-    group.members.map((m) => m.userId),
-  );
+  const { ownedCountByUserId, distinctGamesCountByGroupId } =
+    await fetchAggregatedOwnedCounts(
+      [group.id],
+      group.members.map((m) => m.userId),
+    );
 
-  return buildGroupDtoFromRows(group, ownedGameIdsByUser);
+  return buildGroupDtoFromCounts(
+    group,
+    ownedCountByUserId,
+    distinctGamesCountByGroupId,
+  );
 }
 
 export async function createGroup(userId: string, input: CreateGroupInput) {
@@ -309,7 +340,10 @@ export async function removeGroupMember(
   actorId: string,
   groupId: string,
   targetUserId: string,
-): Promise<{ groupDeleted: boolean }> {
+): Promise<{
+  groupDeleted: boolean;
+  group?: Awaited<ReturnType<typeof formatGroupDto>>;
+}> {
   const isSelf = actorId === targetUserId;
   if (!isSelf) {
     await assertGroupAdmin(actorId, groupId);
@@ -344,23 +378,33 @@ export async function removeGroupMember(
     }
   }
 
-  await prisma.groupMember.delete({
-    where: { groupId_userId: { groupId, userId: targetUserId } },
-  });
-
   if (!isSelf) {
-    // Revocar los links fijos de series recurrentes para que el miembro expulsado no pueda reingresar
     const groupSeries = await prisma.sessionSeries.findMany({
       where: { groupId },
       select: { id: true },
     });
-    for (const s of groupSeries) {
-      await prisma.sessionSeries.update({
-        where: { id: s.id },
-        data: { shareToken: randomBytes(12).toString('base64url') },
-      });
-    }
+
+    await prisma.$transaction([
+      prisma.groupMember.delete({
+        where: { groupId_userId: { groupId, userId: targetUserId } },
+      }),
+      ...groupSeries.map((s) =>
+        prisma.sessionSeries.update({
+          where: { id: s.id },
+          data: { shareToken: randomBytes(12).toString('base64url') },
+        }),
+      ),
+    ]);
+
+    return {
+      groupDeleted: false,
+      group: await formatGroupDto(groupId),
+    };
   }
+
+  await prisma.groupMember.delete({
+    where: { groupId_userId: { groupId, userId: targetUserId } },
+  });
 
   return { groupDeleted: false };
 }

@@ -7,6 +7,7 @@ declare module '@fastify/jwt' {
     payload: {
       sub: string;
       email: string;
+      emailVerified?: boolean;
       firebaseUid?: string;
       isGuest?: boolean;
       guestGroupId?: string;
@@ -16,6 +17,7 @@ declare module '@fastify/jwt' {
     user: {
       sub: string;
       email: string;
+      emailVerified?: boolean;
       firebaseUid?: string;
       isGuest?: boolean;
       guestGroupId?: string;
@@ -32,5 +34,10 @@ declare module 'fastify' {
 
   interface FastifyRequest {
     syncedUser?: User;
+    hasAdminTokenAuth?: boolean;
+  }
+
+  interface FastifyReply {
+    telemetryErrorCode?: string;
   }
 }

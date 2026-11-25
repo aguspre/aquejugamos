@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type Context,
   type ReactNode,
@@ -21,6 +22,12 @@ import {
 import {
   applyOptimisticRsvp,
   applyOptimisticVote,
+  applyProposalCreatedDelta,
+  applyProposalDeletedDelta,
+  applyProposalStatusDelta,
+  applyRsvpDelta,
+  applySessionMetadataPatch,
+  applySessionStatusPatch,
   applyVotesSnapshot,
   getInitials,
   mapGroup,
@@ -53,6 +60,7 @@ import { useAuth } from "./AuthContext";
 export interface EnrichedGroup extends Group {
   gamesCount: number;
   sessionsCount: number;
+  playLogsCount: number;
   memberOwnedCounts: Record<string, number>;
 }
 
@@ -89,6 +97,12 @@ export interface CreatePlayLogInput {
 interface AppStateContextValue {
   currentUser: UserSummary;
   isBootstrapping: boolean;
+  isLibraryLoading: boolean;
+  libraryError: string | null;
+  isPlayLogsLoading: boolean;
+  playLogsError: string | null;
+  isGroupStatsLoading: boolean;
+  groupStatsError: string | null;
   users: UserSummary[];
   groups: EnrichedGroup[];
   activeGroupId: string | null;
@@ -97,10 +111,17 @@ interface AppStateContextValue {
   setActiveGroupId: (groupId: string) => void;
   allGames: Game[];
   library: LibraryGameItem[];
+  libraryCount: number;
   sessions: GameSession[];
   playLogs: PlayLog[];
   lastBggSyncLabel: string;
   refreshAll: () => Promise<void>;
+  ensureLibraryLoaded: (force?: boolean) => Promise<void>;
+  ensurePlayLogsLoaded: (force?: boolean) => Promise<void>;
+  ensureGroupStatsLoaded: (
+    groupId: string | null,
+    force?: boolean,
+  ) => Promise<void>;
   // Group actions
   createGroup: (name: string) => Promise<EnrichedGroup>;
   joinGroupByCode: (
@@ -238,10 +259,63 @@ function formatRelativeSync(isoDate: string | null | undefined): string {
   return `Hace ${diffDays} ${diffDays === 1 ? "día" : "días"}`;
 }
 
+function mergeSessionListPreservingDetails(
+  prev: GameSession[],
+  incomingList: GameSession[],
+  rawCountsById: Map<string, number>,
+): GameSession[] {
+  const prevById = new Map(prev.map((s) => [s.id, s]));
+  return incomingList.map((item) => {
+    const existing = prevById.get(item.id);
+    if (!existing?.isDetailLoaded) {
+      return item;
+    }
+    const expectedProposalsCount = rawCountsById.get(item.id);
+    const prevGoingKey = existing.participants
+      .filter((p) => p.rsvp === "going")
+      .map((p) => p.user.id)
+      .sort()
+      .join(",");
+    const nextGoingKey = item.participants
+      .filter((p) => p.rsvp === "going")
+      .map((p) => p.user.id)
+      .sort()
+      .join(",");
+
+    if (
+      expectedProposalsCount !== undefined &&
+      expectedProposalsCount === existing.proposals.length &&
+      existing.status === item.status &&
+      prevGoingKey === nextGoingKey
+    ) {
+      const nextMaxProposals = item.maxProposalsPerUser ?? null;
+      const nextProposalsRemaining =
+        nextMaxProposals !== null && existing.userProposalsCount !== undefined
+          ? Math.max(0, nextMaxProposals - existing.userProposalsCount)
+          : null;
+
+      return {
+        ...existing,
+        title: item.title,
+        scheduledAt: item.scheduledAt,
+        location: item.location,
+        maxVotesPerUser: item.maxVotesPerUser,
+        maxProposalsPerUser: nextMaxProposals,
+        proposalsRemaining: nextProposalsRemaining,
+        canManageSession: item.canManageSession,
+        series: item.series,
+        participants: item.participants,
+      };
+    }
+    return item;
+  });
+}
+
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const {
     firebaseUser,
     backendUser,
+    initialBootstrap,
     isAuthenticated,
     isGuestSession,
     loading: authLoading,
@@ -277,6 +351,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [backendUser, firebaseUser]);
 
   const [isBootstrapping, setIsBootstrapping] = useState(true);
+  const [isLibraryLoading, setIsLibraryLoading] = useState(false);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [isPlayLogsLoading, setIsPlayLogsLoading] = useState(false);
+  const [playLogsError, setPlayLogsError] = useState<string | null>(null);
+  const [isGroupStatsLoading, setIsGroupStatsLoading] = useState(false);
+  const [groupStatsError, setGroupStatsError] = useState<string | null>(null);
   const [groups, setGroups] = useState<EnrichedGroup[]>([]);
   const [activeGroupId, setActiveGroupIdState] = useState<string | null>(() => {
     try {
@@ -288,6 +368,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [activeGroupStats, setActiveGroupStats] =
     useState<ApiGroupStats | null>(null);
   const [library, setLibrary] = useState<LibraryGameItem[]>([]);
+  const [libraryCount, setLibraryCount] = useState(0);
   const [sessions, setSessions] = useState<GameSession[]>([]);
   const [playLogs, setPlayLogs] = useState<PlayLog[]>([]);
   const [logPlayModalPrefill, setLogPlayModalPrefill] = useState<{
@@ -298,6 +379,42 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     groupId?: string | null;
     playerIds?: string[];
   }>({ open: false });
+
+  const sessionsRef = useRef<GameSession[]>(sessions);
+  sessionsRef.current = sessions;
+  const libraryRef = useRef<LibraryGameItem[]>(library);
+  libraryRef.current = library;
+
+  const authEpochRef = useRef(0);
+  const activeGroupIdRef = useRef<string | null>(null);
+  const appliedBootstrapVersionRef = useRef(0);
+  const libraryLoadedRef = useRef(false);
+  const librarySeqRef = useRef(0);
+  const libraryInFlightRef = useRef<Promise<void> | null>(null);
+  const playLogsLoadedRef = useRef(false);
+  const playLogsSeqRef = useRef(0);
+  const playLogsInFlightRef = useRef<Promise<void> | null>(null);
+  const statsCacheByGroupRef = useRef(new Map<string, ApiGroupStats>());
+  const statsSeqByGroupRef = useRef(new Map<string, number>());
+  const statsInFlightByGroupRef = useRef(new Map<string, Promise<void>>());
+
+  const commitSessions = useCallback(
+    (updater: (prev: GameSession[]) => GameSession[]) => {
+      const next = updater(sessionsRef.current);
+      sessionsRef.current = next;
+      setSessions(next);
+    },
+    [],
+  );
+
+  const commitLibrary = useCallback(
+    (updater: (prev: LibraryGameItem[]) => LibraryGameItem[]) => {
+      const next = updater(libraryRef.current);
+      libraryRef.current = next;
+      setLibrary(next);
+    },
+    [],
+  );
 
   const ensureRegistered = useCallback(() => {
     if (!isAuthenticated) {
@@ -361,18 +478,201 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return groups.find((g) => g.id === activeGroupId) ?? groups[0]!;
   }, [groups, activeGroupId]);
 
-  const refreshGroupStats = useCallback(
-    async (groupId: string | null) => {
+  activeGroupIdRef.current = activeGroup?.id ?? null;
+
+  // Keep activeGroupStats synced with cache if already fetched for that group
+  useEffect(() => {
+    const gid = activeGroup?.id ?? null;
+    setGroupStatsError(null);
+    if (!gid) {
+      setActiveGroupStats(null);
+      setIsGroupStatsLoading(false);
+      return;
+    }
+    setActiveGroupStats(statsCacheByGroupRef.current.get(gid) ?? null);
+    setIsGroupStatsLoading(statsInFlightByGroupRef.current.has(gid));
+  }, [activeGroup?.id]);
+
+  const ensureLibraryLoaded = useCallback(
+    async (force = false): Promise<void> => {
+      if (!isRegisteredReady) return;
+      if (!force && libraryLoadedRef.current) return;
+      if (!force && libraryInFlightRef.current) {
+        return libraryInFlightRef.current;
+      }
+
+      const epoch = authEpochRef.current;
+      const seq = ++librarySeqRef.current;
+      let task!: Promise<void>;
+      task = (async () => {
+        setIsLibraryLoading(true);
+        setLibraryError(null);
+        try {
+          const res = await libraryApi.list();
+          if (authEpochRef.current !== epoch || librarySeqRef.current !== seq) {
+            return;
+          }
+          const mapped = res.items.map(mapLibraryItem);
+          libraryRef.current = mapped;
+          setLibrary(mapped);
+          setLibraryCount(mapped.length);
+          libraryLoadedRef.current = true;
+        } catch (err) {
+          if (authEpochRef.current !== epoch || librarySeqRef.current !== seq) {
+            return;
+          }
+          setLibraryError(
+            err instanceof ApiError
+              ? err.message
+              : "No pudimos cargar tu ludoteca. Intentá nuevamente.",
+          );
+        } finally {
+          if (librarySeqRef.current === seq) {
+            libraryInFlightRef.current = null;
+            if (authEpochRef.current === epoch) {
+              setIsLibraryLoading(false);
+            }
+          }
+        }
+      })();
+
+      libraryInFlightRef.current = task;
+      return task;
+    },
+    [isRegisteredReady],
+  );
+
+  const ensurePlayLogsLoaded = useCallback(
+    async (force = false): Promise<void> => {
+      if (!isRegisteredReady) return;
+      if (!force && playLogsLoadedRef.current) return;
+      if (!force && playLogsInFlightRef.current) {
+        return playLogsInFlightRef.current;
+      }
+
+      const epoch = authEpochRef.current;
+      const seq = ++playLogsSeqRef.current;
+      let task!: Promise<void>;
+      task = (async () => {
+        setIsPlayLogsLoading(true);
+        setPlayLogsError(null);
+        try {
+          const res = await playLogsApi.list();
+          if (
+            authEpochRef.current !== epoch ||
+            playLogsSeqRef.current !== seq
+          ) {
+            return;
+          }
+          setPlayLogs(res.playLogs.map(mapPlayLog));
+          playLogsLoadedRef.current = true;
+        } catch (err) {
+          if (
+            authEpochRef.current !== epoch ||
+            playLogsSeqRef.current !== seq
+          ) {
+            return;
+          }
+          setPlayLogsError(
+            err instanceof ApiError
+              ? err.message
+              : "No pudimos cargar el historial de partidas.",
+          );
+        } finally {
+          if (playLogsSeqRef.current === seq) {
+            playLogsInFlightRef.current = null;
+            if (authEpochRef.current === epoch) {
+              setIsPlayLogsLoading(false);
+            }
+          }
+        }
+      })();
+
+      playLogsInFlightRef.current = task;
+      return task;
+    },
+    [isRegisteredReady],
+  );
+
+  const ensureGroupStatsLoaded = useCallback(
+    async (groupId: string | null, force = false): Promise<void> => {
       if (!isRegisteredReady || !groupId) {
         setActiveGroupStats(null);
+        setGroupStatsError(null);
+        setIsGroupStatsLoading(false);
         return;
       }
-      try {
-        const { stats } = await playLogsApi.getGroupStats(groupId);
-        setActiveGroupStats(stats);
-      } catch {
-        setActiveGroupStats(null);
+
+      if (!force && statsCacheByGroupRef.current.has(groupId)) {
+        if (activeGroupIdRef.current === groupId) {
+          setActiveGroupStats(statsCacheByGroupRef.current.get(groupId)!);
+          setGroupStatsError(null);
+          setIsGroupStatsLoading(false);
+        }
+        return;
       }
+
+      const existingTask = statsInFlightByGroupRef.current.get(groupId);
+      if (!force && existingTask) {
+        if (activeGroupIdRef.current === groupId) {
+          setIsGroupStatsLoading(true);
+          setGroupStatsError(null);
+        }
+        return existingTask;
+      }
+
+      const epoch = authEpochRef.current;
+      const seq = (statsSeqByGroupRef.current.get(groupId) ?? 0) + 1;
+      statsSeqByGroupRef.current.set(groupId, seq);
+
+      const task = (async () => {
+        if (activeGroupIdRef.current === groupId) {
+          setIsGroupStatsLoading(true);
+          setGroupStatsError(null);
+        }
+        try {
+          const { stats } = await playLogsApi.getGroupStats(groupId);
+          if (
+            authEpochRef.current !== epoch ||
+            statsSeqByGroupRef.current.get(groupId) !== seq
+          ) {
+            return;
+          }
+          statsCacheByGroupRef.current.set(groupId, stats);
+          if (activeGroupIdRef.current === groupId) {
+            setActiveGroupStats(stats);
+            setGroupStatsError(null);
+          }
+        } catch (err) {
+          if (
+            authEpochRef.current !== epoch ||
+            statsSeqByGroupRef.current.get(groupId) !== seq
+          ) {
+            return;
+          }
+          if (activeGroupIdRef.current === groupId) {
+            setActiveGroupStats(null);
+            setGroupStatsError(
+              err instanceof ApiError
+                ? err.message
+                : "No pudimos cargar las estadísticas del grupo.",
+            );
+          }
+        } finally {
+          if (
+            authEpochRef.current === epoch &&
+            statsSeqByGroupRef.current.get(groupId) === seq
+          ) {
+            statsInFlightByGroupRef.current.delete(groupId);
+            if (activeGroupIdRef.current === groupId) {
+              setIsGroupStatsLoading(false);
+            }
+          }
+        }
+      })();
+
+      statsInFlightByGroupRef.current.set(groupId, task);
+      return task;
     },
     [isRegisteredReady],
   );
@@ -380,54 +680,93 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const refreshAll = useCallback(async () => {
     if (!isRegisteredReady && !isInvitedGuestReady) {
       setGroups([]);
-      setLibrary([]);
-      setSessions([]);
+      commitLibrary(() => []);
+      setLibraryCount(0);
+      commitSessions(() => []);
       setPlayLogs([]);
       setActiveGroupStats(null);
+      libraryLoadedRef.current = false;
+      playLogsLoadedRef.current = false;
+      statsCacheByGroupRef.current.clear();
       setIsBootstrapping(false);
       return;
     }
 
+    const epoch = authEpochRef.current;
     setIsBootstrapping(true);
     try {
       if (isInvitedGuestReady && !isRegisteredReady) {
         const sessionsRes = await sessionsApi.list();
+        if (authEpochRef.current !== epoch) return;
+        const countsMap = new Map(
+          sessionsRes.sessions.map((s) => [s.id, s.proposalsCount]),
+        );
+        const mappedList = sessionsRes.sessions.map(mapSessionListItem);
         setGroups([]);
-        setLibrary([]);
+        commitLibrary(() => []);
+        setLibraryCount(0);
         setPlayLogs([]);
         setActiveGroupStats(null);
-        setSessions(sessionsRes.sessions.map(mapSessionListItem));
+        commitSessions((prev) =>
+          mergeSessionListPreservingDetails(prev, mappedList, countsMap),
+        );
         return;
       }
 
-      const [groupsRes, libraryRes, sessionsRes, logsRes] = await Promise.all([
-        groupsApi.list(),
-        libraryApi.list(),
-        sessionsApi.list(),
-        playLogsApi.list(),
-      ]);
-
-      const mappedGroups = groupsRes.groups.map(mapGroup);
-      setGroups(mappedGroups);
-      setLibrary(libraryRes.items.map(mapLibraryItem));
-      setSessions(sessionsRes.sessions.map(mapSessionListItem));
-      setPlayLogs(logsRes.playLogs.map(mapPlayLog));
-
-      setActiveGroupIdState((prev) => {
-        if (prev && mappedGroups.some((g) => g.id === prev)) {
-          return prev;
-        }
-        return mappedGroups[0]?.id ?? null;
-      });
+      const bootstrapped = await refreshBackendSync();
+      void bootstrapped;
     } catch {
-      // Mantenemos el estado actual si falla una carga inicial o recarga en segundo plano
+      // Mantenemos el estado actual si falla una recarga en segundo plano
     } finally {
-      setIsBootstrapping(false);
+      if (authEpochRef.current === epoch) {
+        setIsBootstrapping(false);
+      }
     }
-  }, [isRegisteredReady, isInvitedGuestReady]);
+  }, [
+    isRegisteredReady,
+    isInvitedGuestReady,
+    refreshBackendSync,
+    commitLibrary,
+    commitSessions,
+  ]);
 
+  const authIdentityKey = isRegisteredReady
+    ? `user:${backendUser?.id ?? ""}`
+    : isInvitedGuestReady
+      ? "guest"
+      : "anon";
+  const prevAuthIdentityRef = useRef(authIdentityKey);
+
+  // Hydrate immediately from AuthContext's single /api/auth/bootstrap response (0 extra network calls!)
   useEffect(() => {
     if (authLoading) return;
+
+    if (prevAuthIdentityRef.current !== authIdentityKey) {
+      prevAuthIdentityRef.current = authIdentityKey;
+      authEpochRef.current += 1;
+      appliedBootstrapVersionRef.current = 0;
+      libraryLoadedRef.current = false;
+      librarySeqRef.current += 1;
+      libraryInFlightRef.current = null;
+      playLogsLoadedRef.current = false;
+      playLogsSeqRef.current += 1;
+      playLogsInFlightRef.current = null;
+      statsCacheByGroupRef.current.clear();
+      statsInFlightByGroupRef.current.clear();
+      setIsLibraryLoading(false);
+      setIsPlayLogsLoading(false);
+      setIsGroupStatsLoading(false);
+      setLibraryError(null);
+      setPlayLogsError(null);
+      setGroupStatsError(null);
+      setGroups([]);
+      commitLibrary(() => []);
+      setLibraryCount(0);
+      commitSessions(() => []);
+      setPlayLogs([]);
+      setActiveGroupStats(null);
+    }
+
     if (
       isAuthenticated &&
       (backendSyncStatus === "idle" || backendSyncStatus === "syncing")
@@ -435,18 +774,57 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setIsBootstrapping(true);
       return;
     }
-    void refreshAll();
+
+    if (!isRegisteredReady && !isInvitedGuestReady) {
+      setIsBootstrapping(false);
+      return;
+    }
+
+    if (
+      initialBootstrap &&
+      initialBootstrap.version !== appliedBootstrapVersionRef.current
+    ) {
+      appliedBootstrapVersionRef.current = initialBootstrap.version;
+      const mappedGroups = initialBootstrap.groups.map(mapGroup);
+      const countsMap = new Map(
+        initialBootstrap.sessions.map((s) => [s.id, s.proposalsCount]),
+      );
+      const mappedSessions = initialBootstrap.sessions.map(mapSessionListItem);
+
+      setGroups(mappedGroups);
+      setLibraryCount(initialBootstrap.libraryCount);
+      commitSessions((prev) =>
+        mergeSessionListPreservingDetails(prev, mappedSessions, countsMap),
+      );
+      setActiveGroupIdState((prev) => {
+        if (prev && mappedGroups.some((g) => g.id === prev)) {
+          return prev;
+        }
+        return mappedGroups[0]?.id ?? null;
+      });
+      setIsBootstrapping(false);
+      return;
+    }
+
+    // Guest session joined dynamically via /api/auth/guest-join (without initialBootstrap)
+    if (isInvitedGuestReady && !isRegisteredReady && !initialBootstrap) {
+      void refreshAll();
+      return;
+    }
+
+    setIsBootstrapping(false);
   }, [
     authLoading,
+    authIdentityKey,
     isAuthenticated,
-    isGuestSession,
+    isRegisteredReady,
+    isInvitedGuestReady,
     backendSyncStatus,
+    initialBootstrap,
     refreshAll,
+    commitLibrary,
+    commitSessions,
   ]);
-
-  useEffect(() => {
-    void refreshGroupStats(activeGroup?.id ?? null);
-  }, [activeGroup?.id, refreshGroupStats]);
 
   const users = useMemo<UserSummary[]>(() => {
     const map = new Map<string, UserSummary>();
@@ -490,7 +868,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           return group.memberOwnedCounts[userId] ?? 0;
         }
       }
-      if (userId && userId === currentUser.id) {
+      if (userId && userId === currentUser.id && libraryLoadedRef.current) {
         return library.filter((g) => g.status === "owned" && !g.isExpansion)
           .length;
       }
@@ -507,14 +885,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
 
   // =========================================================================
-  // Group actions (100% real API)
+  // Group actions
   // =========================================================================
 
   const createGroup = useCallback(
     async (name: string): Promise<EnrichedGroup> => {
       ensureRegistered();
+      const epoch = authEpochRef.current;
       const { group } = await groupsApi.create(name.trim());
       const mapped = mapGroup(group);
+      if (authEpochRef.current !== epoch) return mapped;
       setGroups((prev) => [mapped, ...prev]);
       setActiveGroupId(mapped.id);
       return mapped;
@@ -527,8 +907,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       rawCode: string,
     ): Promise<{ group: EnrichedGroup; alreadyMember: boolean }> => {
       ensureRegistered();
+      const epoch = authEpochRef.current;
       const { group, alreadyMember } = await groupsApi.join(rawCode.trim());
       const mapped = mapGroup(group);
+      if (authEpochRef.current !== epoch) {
+        return { group: mapped, alreadyMember };
+      }
       setGroups((prev) => {
         const exists = prev.some((g) => g.id === mapped.id);
         return exists
@@ -544,7 +928,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const regenerateInviteCode = useCallback(
     async (groupId: string): Promise<string> => {
       ensureRegistered();
+      const epoch = authEpochRef.current;
       const { inviteCode } = await groupsApi.regenerateCode(groupId);
+      if (authEpochRef.current !== epoch) return inviteCode;
       setGroups((prev) =>
         prev.map((g) => (g.id === groupId ? { ...g, inviteCode } : g)),
       );
@@ -556,6 +942,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const toggleMemberRole = useCallback(
     async (groupId: string, userId: string): Promise<void> => {
       ensureRegistered();
+      const epoch = authEpochRef.current;
       const targetGroup = groups.find((g) => g.id === groupId);
       const targetMember = targetGroup?.members.find(
         (m) => m.user.id === userId,
@@ -568,6 +955,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         userId,
         nextRole,
       );
+      if (authEpochRef.current !== epoch) return;
       const mapped = mapGroup(group);
       setGroups((prev) => prev.map((g) => (g.id === groupId ? mapped : g)));
     },
@@ -577,7 +965,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const removeGroupMember = useCallback(
     async (groupId: string, userId: string): Promise<void> => {
       ensureRegistered();
-      const { groupDeleted } = await groupsApi.removeMember(groupId, userId);
+      const epoch = authEpochRef.current;
+      const { groupDeleted, group } = await groupsApi.removeMember(
+        groupId,
+        userId,
+      );
+      if (authEpochRef.current !== epoch) return;
+      statsCacheByGroupRef.current.delete(groupId);
+
       if (groupDeleted || userId === currentUser.id) {
         setGroups((prev) => {
           const remaining = prev.filter((g) => g.id !== groupId);
@@ -586,16 +981,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           }
           return remaining;
         });
-      } else {
-        const { groups: refreshed } = await groupsApi.list();
-        setGroups(refreshed.map(mapGroup));
+      } else if (group) {
+        const mapped = mapGroup(group);
+        setGroups((prev) => prev.map((g) => (g.id === groupId ? mapped : g)));
       }
     },
     [ensureRegistered, currentUser.id, activeGroupId],
   );
 
   // =========================================================================
-  // Library & BGG actions (100% real API)
+  // Library & BGG actions
   // =========================================================================
 
   const syncWithBgg = useCallback(
@@ -604,17 +999,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       forceRefresh = false,
     ): Promise<BggSyncResponse["sync"]> => {
       ensureRegistered();
+      const epoch = authEpochRef.current;
       const { sync } = await bggApi.sync({ bggUsername, forceRefresh });
-      const [libraryRes, groupsRes] = await Promise.all([
-        libraryApi.list(),
-        groupsApi.list(),
-        refreshBackendSync(),
-      ]);
-      setLibrary(libraryRes.items.map(mapLibraryItem));
-      setGroups(groupsRes.groups.map(mapGroup));
+      if (authEpochRef.current !== epoch) return sync;
+      statsCacheByGroupRef.current.clear();
+      await Promise.all([ensureLibraryLoaded(true), refreshBackendSync()]);
       return sync;
     },
-    [ensureRegistered, refreshBackendSync],
+    [ensureRegistered, ensureLibraryLoaded, refreshBackendSync],
   );
 
   const searchBgg = useCallback(
@@ -632,17 +1024,24 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       status: UserGameStatus = "owned",
     ): Promise<LibraryGameItem> => {
       ensureRegistered();
+      const epoch = authEpochRef.current;
       const { item } = await bggApi.importGame(bggId, { status });
       const mapped = mapLibraryItem(item);
-      setLibrary((prev) => {
-        const exists = prev.some((i) => i.id === mapped.id);
-        return exists
+      if (authEpochRef.current !== epoch) return mapped;
+      statsCacheByGroupRef.current.clear();
+
+      const exists = libraryRef.current.some((i) => i.id === mapped.id);
+      commitLibrary((prev) =>
+        prev.some((i) => i.id === mapped.id)
           ? prev.map((i) => (i.id === mapped.id ? mapped : i))
-          : [mapped, ...prev];
-      });
+          : [mapped, ...prev],
+      );
+      if (!exists) {
+        setLibraryCount((c) => c + 1);
+      }
       return mapped;
     },
-    [ensureRegistered],
+    [ensureRegistered, commitLibrary],
   );
 
   const updateLibraryItem = useCallback(
@@ -653,8 +1052,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       >,
     ): Promise<void> => {
       ensureRegistered();
+      const epoch = authEpochRef.current;
       let previousItem: LibraryGameItem | undefined;
-      setLibrary((prev) =>
+      commitLibrary((prev) =>
         prev.map((item) => {
           if (item.id === gameId) {
             previousItem = item;
@@ -666,53 +1066,79 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       try {
         await libraryApi.updateItem(gameId, {
           status: patch.status,
-          personalRating: patch.personalRating ?? null,
-          notes: patch.notes ?? null,
+          personalRating: patch.personalRating,
+          notes: patch.notes,
         });
+        if (authEpochRef.current === epoch && patch.status !== undefined) {
+          statsCacheByGroupRef.current.clear();
+        }
       } catch (err) {
-        if (previousItem) {
+        if (authEpochRef.current === epoch && previousItem) {
           const rollback = previousItem;
-          setLibrary((prev) =>
+          commitLibrary((prev) =>
             prev.map((item) => (item.id === gameId ? rollback : item)),
           );
         }
         throw err;
       }
     },
-    [ensureRegistered],
+    [ensureRegistered, commitLibrary],
   );
 
   const removeLibraryItem = useCallback(
     async (gameId: string): Promise<void> => {
       ensureRegistered();
+      const epoch = authEpochRef.current;
+      const removedItem = libraryRef.current.find((item) => item.id === gameId);
       await libraryApi.removeItem(gameId);
-      setLibrary((prev) => prev.filter((item) => item.id !== gameId));
-      void groupsApi
-        .list()
-        .then(({ groups: refreshed }) => setGroups(refreshed.map(mapGroup)))
-        .catch(() => {
-          // Ignore background count refresh errors
-        });
+      if (authEpochRef.current !== epoch) return;
+      commitLibrary((prev) => prev.filter((item) => item.id !== gameId));
+      setLibraryCount((c) => Math.max(0, c - 1));
+      statsCacheByGroupRef.current.clear();
+
+      if (
+        removedItem &&
+        removedItem.status === "owned" &&
+        !removedItem.isExpansion
+      ) {
+        setGroups((prev) =>
+          prev.map((g) => {
+            if (!(currentUser.id in g.memberOwnedCounts)) return g;
+            const prevUserOwned = g.memberOwnedCounts[currentUser.id] ?? 0;
+            return {
+              ...g,
+              memberOwnedCounts: {
+                ...g.memberOwnedCounts,
+                [currentUser.id]: Math.max(0, prevUserOwned - 1),
+              },
+            };
+          }),
+        );
+      }
     },
-    [ensureRegistered],
+    [ensureRegistered, currentUser.id, commitLibrary],
   );
 
   // =========================================================================
-  // Session actions (100% real API)
+  // Session actions (Delta-first updates)
   // =========================================================================
 
-  const upsertSession = useCallback((updated: GameSession) => {
-    setSessions((prev) => {
-      const exists = prev.some((s) => s.id === updated.id);
-      return exists
-        ? prev.map((s) => (s.id === updated.id ? updated : s))
-        : [updated, ...prev];
-    });
-  }, []);
+  const upsertSession = useCallback(
+    (updated: GameSession) => {
+      commitSessions((prev) => {
+        const exists = prev.some((s) => s.id === updated.id);
+        return exists
+          ? prev.map((s) => (s.id === updated.id ? updated : s))
+          : [updated, ...prev];
+      });
+    },
+    [commitSessions],
+  );
 
   const createSession = useCallback(
     async (input: CreateSessionInput): Promise<GameSession> => {
       ensureRegistered();
+      const epoch = authEpochRef.current;
       const { session } = await sessionsApi.create({
         groupId: input.groupId,
         title: input.title,
@@ -724,7 +1150,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         recurrenceFrequency: input.recurrenceFrequency ?? null,
       });
       const mapped = mapSessionDetail(session);
-      upsertSession(mapped);
+      if (authEpochRef.current === epoch) {
+        upsertSession(mapped);
+      }
       return mapped;
     },
     [ensureRegistered, upsertSession],
@@ -736,9 +1164,27 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       input: UpdateSessionInput,
     ): Promise<GameSession> => {
       ensureRegistered();
-      const { session } = await sessionsApi.update(sessionId, input);
+      const epoch = authEpochRef.current;
+      const snapshotBefore = sessionsRef.current.find((s) => s.id === sessionId);
+      const { sessionPatch } = await sessionsApi.update(sessionId, input);
+      if (authEpochRef.current !== epoch) {
+        if (snapshotBefore) {
+          return applySessionMetadataPatch(snapshotBefore, sessionPatch);
+        }
+        throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+      }
+      const existing =
+        sessionsRef.current.find((s) => s.id === sessionId) ?? snapshotBefore;
+      if (existing) {
+        const patched = applySessionMetadataPatch(existing, sessionPatch);
+        upsertSession(patched);
+        return patched;
+      }
+      const { session } = await sessionsApi.getDetail(sessionId);
       const mapped = mapSessionDetail(session);
-      upsertSession(mapped);
+      if (authEpochRef.current === epoch) {
+        upsertSession(mapped);
+      }
       return mapped;
     },
     [ensureRegistered, upsertSession],
@@ -747,12 +1193,30 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const cancelSession = useCallback(
     async (sessionId: string): Promise<GameSession> => {
       ensureRegistered();
-      const { session } = await sessionsApi.updateStatus(
+      const epoch = authEpochRef.current;
+      const snapshotBefore = sessionsRef.current.find((s) => s.id === sessionId);
+      const { sessionPatch } = await sessionsApi.updateStatus(
         sessionId,
         "cancelled",
       );
+      if (authEpochRef.current !== epoch) {
+        if (snapshotBefore) {
+          return applySessionStatusPatch(snapshotBefore, sessionPatch);
+        }
+        throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+      }
+      const existing =
+        sessionsRef.current.find((s) => s.id === sessionId) ?? snapshotBefore;
+      if (existing) {
+        const patched = applySessionStatusPatch(existing, sessionPatch);
+        upsertSession(patched);
+        return patched;
+      }
+      const { session } = await sessionsApi.getDetail(sessionId);
       const mapped = mapSessionDetail(session);
-      upsertSession(mapped);
+      if (authEpochRef.current === epoch) {
+        upsertSession(mapped);
+      }
       return mapped;
     },
     [ensureRegistered, upsertSession],
@@ -761,9 +1225,30 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const reopenSession = useCallback(
     async (sessionId: string): Promise<GameSession> => {
       ensureRegistered();
-      const { session } = await sessionsApi.updateStatus(sessionId, "voting");
+      const epoch = authEpochRef.current;
+      const snapshotBefore = sessionsRef.current.find((s) => s.id === sessionId);
+      const { sessionPatch } = await sessionsApi.updateStatus(
+        sessionId,
+        "voting",
+      );
+      if (authEpochRef.current !== epoch) {
+        if (snapshotBefore) {
+          return applySessionStatusPatch(snapshotBefore, sessionPatch);
+        }
+        throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+      }
+      const existing =
+        sessionsRef.current.find((s) => s.id === sessionId) ?? snapshotBefore;
+      if (existing) {
+        const patched = applySessionStatusPatch(existing, sessionPatch);
+        upsertSession(patched);
+        return patched;
+      }
+      const { session } = await sessionsApi.getDetail(sessionId);
       const mapped = mapSessionDetail(session);
-      upsertSession(mapped);
+      if (authEpochRef.current === epoch) {
+        upsertSession(mapped);
+      }
       return mapped;
     },
     [ensureRegistered, upsertSession],
@@ -772,10 +1257,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const deleteSession = useCallback(
     async (sessionId: string): Promise<void> => {
       ensureRegistered();
+      const epoch = authEpochRef.current;
       await sessionsApi.remove(sessionId);
-      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      if (authEpochRef.current !== epoch) return;
+      commitSessions((prev) => prev.filter((s) => s.id !== sessionId));
     },
-    [ensureRegistered],
+    [ensureRegistered, commitSessions],
   );
 
   const joinSessionByToken = useCallback(
@@ -784,9 +1271,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       rsvp: RsvpStatus = "going",
     ): Promise<GameSession> => {
       ensureSessionAccess();
+      const epoch = authEpochRef.current;
       const { session } = await sessionsApi.joinByToken(inviteToken, rsvp);
       const mapped = mapSessionDetail(session);
-      upsertSession(mapped);
+      if (authEpochRef.current === epoch) {
+        upsertSession(mapped);
+      }
       return mapped;
     },
     [ensureSessionAccess, upsertSession],
@@ -798,9 +1288,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       rsvp: RsvpStatus = "going",
     ): Promise<GameSession> => {
       ensureRegistered();
+      const epoch = authEpochRef.current;
       const { session } = await sessionsApi.joinSeries(shareToken, rsvp);
       const mapped = mapSessionDetail(session);
-      upsertSession(mapped);
+      if (authEpochRef.current === epoch) {
+        upsertSession(mapped);
+      }
       return mapped;
     },
     [ensureRegistered, upsertSession],
@@ -809,9 +1302,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const advanceSeries = useCallback(
     async (seriesId: string): Promise<GameSession> => {
       ensureRegistered();
+      const epoch = authEpochRef.current;
       const { session } = await sessionsApi.advanceSeries(seriesId);
       const mapped = mapSessionDetail(session);
-      setSessions((prev) => {
+      if (authEpochRef.current !== epoch) return mapped;
+      commitSessions((prev) => {
         const archived = prev.map((s) =>
           s.series?.id === seriesId &&
           s.id !== mapped.id &&
@@ -828,7 +1323,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       });
       return mapped;
     },
-    [ensureRegistered],
+    [ensureRegistered, commitSessions],
   );
 
   const updateSeries = useCallback(
@@ -840,8 +1335,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       activeSessionId: string | null;
     }> => {
       ensureRegistered();
+      const epoch = authEpochRef.current;
       const result = await sessionsApi.updateSeries(seriesId, payload);
-      setSessions((prev) =>
+      if (authEpochRef.current !== epoch) return result;
+      commitSessions((prev) =>
         prev.map((s) => {
           if (s.series?.id !== seriesId) return s;
           const isStaleActive =
@@ -859,15 +1356,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       );
       return result;
     },
-    [ensureRegistered],
+    [ensureRegistered, commitSessions],
   );
 
   const loadSessionDetail = useCallback(
     async (sessionId: string): Promise<GameSession> => {
       ensureSessionAccess();
+      const epoch = authEpochRef.current;
       const { session } = await sessionsApi.getDetail(sessionId);
       const mapped = mapSessionDetail(session);
-      upsertSession(mapped);
+      if (authEpochRef.current === epoch) {
+        upsertSession(mapped);
+      }
       return mapped;
     },
     [ensureSessionAccess, upsertSession],
@@ -894,8 +1394,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       onOptimistic?: (optimisticSession: GameSession) => void,
     ): Promise<GameSession> => {
       ensureSessionAccess();
+      const epoch = authEpochRef.current;
       const targetSession =
-        currentSession ?? sessions.find((s) => s.id === sessionId);
+        currentSession ?? sessionsRef.current.find((s) => s.id === sessionId);
 
       if (targetSession) {
         const optimistic = applyOptimisticRsvp(
@@ -908,18 +1409,34 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        const { session } = await sessionsApi.updateRsvp(sessionId, rsvp);
+        const { rsvpDelta } = await sessionsApi.updateRsvp(sessionId, rsvp);
+        if (authEpochRef.current !== epoch) {
+          if (targetSession) {
+            return applyRsvpDelta(targetSession, rsvpDelta);
+          }
+          throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+        }
+        const latestBase =
+          sessionsRef.current.find((s) => s.id === sessionId) ?? targetSession;
+        if (latestBase) {
+          const merged = applyRsvpDelta(latestBase, rsvpDelta);
+          upsertSession(merged);
+          return merged;
+        }
+        const { session } = await sessionsApi.getDetail(sessionId);
         const mapped = mapSessionDetail(session);
-        upsertSession(mapped);
+        if (authEpochRef.current === epoch) {
+          upsertSession(mapped);
+        }
         return mapped;
       } catch (err) {
-        if (targetSession) {
+        if (authEpochRef.current === epoch && targetSession) {
           upsertSession(targetSession);
         }
         throw err;
       }
     },
-    [ensureSessionAccess, sessions, currentUser, upsertSession],
+    [ensureSessionAccess, currentUser, upsertSession],
   );
 
   const proposeGame = useCallback(
@@ -929,9 +1446,27 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       note?: string,
     ): Promise<GameSession> => {
       ensureSessionAccess();
-      const { session } = await sessionsApi.propose(sessionId, game.id, note);
+      const epoch = authEpochRef.current;
+      const snapshotBefore = sessionsRef.current.find((s) => s.id === sessionId);
+      const delta = await sessionsApi.propose(sessionId, game.id, note);
+      if (authEpochRef.current !== epoch) {
+        if (snapshotBefore) {
+          return applyProposalCreatedDelta(snapshotBefore, delta);
+        }
+        throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+      }
+      const existing =
+        sessionsRef.current.find((s) => s.id === sessionId) ?? snapshotBefore;
+      if (existing) {
+        const merged = applyProposalCreatedDelta(existing, delta);
+        upsertSession(merged);
+        return merged;
+      }
+      const { session } = await sessionsApi.getDetail(sessionId);
       const mapped = mapSessionDetail(session);
-      upsertSession(mapped);
+      if (authEpochRef.current === epoch) {
+        upsertSession(mapped);
+      }
       return mapped;
     },
     [ensureSessionAccess, upsertSession],
@@ -943,13 +1478,37 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       proposalId: string,
     ): Promise<{ session: GameSession; refundedVotesCount: number }> => {
       ensureSessionAccess();
-      const { session, refundedVotesCount } = await sessionsApi.removeProposal(
-        sessionId,
-        proposalId,
-      );
+      const epoch = authEpochRef.current;
+      const snapshotBefore = sessionsRef.current.find((s) => s.id === sessionId);
+      const delta = await sessionsApi.removeProposal(sessionId, proposalId);
+      if (authEpochRef.current !== epoch) {
+        if (snapshotBefore) {
+          return {
+            session: applyProposalDeletedDelta(snapshotBefore, delta),
+            refundedVotesCount: delta.refundedVotesCount ?? 0,
+          };
+        }
+        throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+      }
+      const existing =
+        sessionsRef.current.find((s) => s.id === sessionId) ?? snapshotBefore;
+      if (existing) {
+        const merged = applyProposalDeletedDelta(existing, delta);
+        upsertSession(merged);
+        return {
+          session: merged,
+          refundedVotesCount: delta.refundedVotesCount ?? 0,
+        };
+      }
+      const { session } = await sessionsApi.getDetail(sessionId);
       const mapped = mapSessionDetail(session);
-      upsertSession(mapped);
-      return { session: mapped, refundedVotesCount: refundedVotesCount ?? 0 };
+      if (authEpochRef.current === epoch) {
+        upsertSession(mapped);
+      }
+      return {
+        session: mapped,
+        refundedVotesCount: delta.refundedVotesCount ?? 0,
+      };
     },
     [ensureSessionAccess, upsertSession],
   );
@@ -961,13 +1520,31 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       status: ProposalStatus,
     ): Promise<GameSession> => {
       ensureRegistered();
-      const { session } = await sessionsApi.updateProposalStatus(
+      const epoch = authEpochRef.current;
+      const snapshotBefore = sessionsRef.current.find((s) => s.id === sessionId);
+      const delta = await sessionsApi.updateProposalStatus(
         sessionId,
         proposalId,
         status,
       );
+      if (authEpochRef.current !== epoch) {
+        if (snapshotBefore) {
+          return applyProposalStatusDelta(snapshotBefore, delta);
+        }
+        throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+      }
+      const existing =
+        sessionsRef.current.find((s) => s.id === sessionId) ?? snapshotBefore;
+      if (existing) {
+        const merged = applyProposalStatusDelta(existing, delta);
+        upsertSession(merged);
+        return merged;
+      }
+      const { session } = await sessionsApi.getDetail(sessionId);
       const mapped = mapSessionDetail(session);
-      upsertSession(mapped);
+      if (authEpochRef.current === epoch) {
+        upsertSession(mapped);
+      }
       return mapped;
     },
     [ensureRegistered, upsertSession],
@@ -982,8 +1559,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       onOptimistic?: (optimisticSession: GameSession) => void,
     ): Promise<GameSession> => {
       ensureSessionAccess();
+      const epoch = authEpochRef.current;
       const targetSession =
-        currentSession ?? sessions.find((s) => s.id === sessionId);
+        currentSession ?? sessionsRef.current.find((s) => s.id === sessionId);
       const targetProposal = targetSession?.proposals.find(
         (p) => p.id === proposalId,
       );
@@ -1012,47 +1590,79 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           ? await sessionsApi.removeVote(sessionId, proposalId)
           : await sessionsApi.castVote(sessionId, proposalId, rank);
 
-        if (targetSession) {
-          const merged = applyVotesSnapshot(targetSession, votes);
+        if (authEpochRef.current !== epoch) {
+          if (targetSession) {
+            return applyVotesSnapshot(targetSession, votes);
+          }
+          throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+        }
+
+        const latestBase =
+          sessionsRef.current.find((s) => s.id === sessionId) ?? targetSession;
+        if (latestBase) {
+          const merged = applyVotesSnapshot(latestBase, votes);
           upsertSession(merged);
           return merged;
         }
 
         const { session: detail } = await sessionsApi.getDetail(sessionId);
         const mapped = mapSessionDetail(detail);
-        upsertSession(mapped);
+        if (authEpochRef.current === epoch) {
+          upsertSession(mapped);
+        }
         return mapped;
       } catch (err) {
-        if (targetSession) {
+        if (authEpochRef.current === epoch && targetSession) {
           upsertSession(targetSession);
         }
         throw err;
       }
     },
-    [ensureSessionAccess, sessions, upsertSession],
+    [ensureSessionAccess, upsertSession],
   );
 
   const toggleSessionLock = useCallback(
     async (sessionId: string): Promise<GameSession> => {
       ensureRegistered();
-      const current = sessions.find((s) => s.id === sessionId);
+      const epoch = authEpochRef.current;
+      const current = sessionsRef.current.find((s) => s.id === sessionId);
       const nextStatus = current?.status === "locked" ? "voting" : "locked";
 
-      const { session } = await sessionsApi.updateStatus(sessionId, nextStatus);
+      const { sessionPatch } = await sessionsApi.updateStatus(
+        sessionId,
+        nextStatus,
+      );
+      if (authEpochRef.current !== epoch) {
+        if (current) {
+          return applySessionStatusPatch(current, sessionPatch);
+        }
+        throw new ApiError(401, "SESSION_CHANGED", "La sesión de usuario cambió.");
+      }
+      const existing =
+        sessionsRef.current.find((s) => s.id === sessionId) ?? current;
+      if (existing) {
+        const patched = applySessionStatusPatch(existing, sessionPatch);
+        upsertSession(patched);
+        return patched;
+      }
+      const { session } = await sessionsApi.getDetail(sessionId);
       const mapped = mapSessionDetail(session);
-      upsertSession(mapped);
+      if (authEpochRef.current === epoch) {
+        upsertSession(mapped);
+      }
       return mapped;
     },
-    [ensureRegistered, sessions, upsertSession],
+    [ensureRegistered, upsertSession],
   );
 
   // =========================================================================
-  // Play log actions (100% real API)
+  // Play log actions
   // =========================================================================
 
   const addPlayLog = useCallback(
     async (input: CreatePlayLogInput): Promise<PlayLog> => {
       ensureRegistered();
+      const epoch = authEpochRef.current;
       const resolvedGroupId =
         input.groupId !== undefined ? input.groupId : (activeGroup?.id ?? null);
       const { playLog } = await playLogsApi.create({
@@ -1069,25 +1679,52 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         })),
       });
       const mapped = mapPlayLog(playLog);
+      if (authEpochRef.current !== epoch) return mapped;
       setPlayLogs((prev) => [mapped, ...prev]);
+
       if (resolvedGroupId) {
-        void refreshGroupStats(resolvedGroupId);
+        setGroups((prev) =>
+          prev.map((g) =>
+            g.id === resolvedGroupId
+              ? { ...g, playLogsCount: g.playLogsCount + 1 }
+              : g,
+          ),
+        );
+        statsCacheByGroupRef.current.delete(resolvedGroupId);
+        if (activeGroupIdRef.current === resolvedGroupId) {
+          void ensureGroupStatsLoaded(resolvedGroupId, true);
+        }
       }
       return mapped;
     },
-    [ensureRegistered, activeGroup, refreshGroupStats],
+    [ensureRegistered, activeGroup, ensureGroupStatsLoaded],
   );
 
   const deletePlayLog = useCallback(
     async (playLogId: string): Promise<void> => {
       ensureRegistered();
+      const epoch = authEpochRef.current;
+      const targetLog = playLogs.find((l) => l.id === playLogId);
       await playLogsApi.remove(playLogId);
+      if (authEpochRef.current !== epoch) return;
       setPlayLogs((prev) => prev.filter((l) => l.id !== playLogId));
-      if (activeGroup?.id) {
-        void refreshGroupStats(activeGroup.id);
+
+      const gid = targetLog ? targetLog.groupId : (activeGroup?.id ?? null);
+      if (gid) {
+        setGroups((prev) =>
+          prev.map((g) =>
+            g.id === gid
+              ? { ...g, playLogsCount: Math.max(0, g.playLogsCount - 1) }
+              : g,
+          ),
+        );
+        statsCacheByGroupRef.current.delete(gid);
+        if (activeGroupIdRef.current === gid) {
+          void ensureGroupStatsLoaded(gid, true);
+        }
       }
     },
-    [ensureRegistered, activeGroup, refreshGroupStats],
+    [ensureRegistered, playLogs, activeGroup, ensureGroupStatsLoaded],
   );
 
   const openLogPlayModal: AppStateContextValue["openLogPlayModal"] =
@@ -1111,6 +1748,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       value={{
         currentUser,
         isBootstrapping,
+        isLibraryLoading,
+        libraryError,
+        isPlayLogsLoading,
+        playLogsError,
+        isGroupStatsLoading,
+        groupStatsError,
         users,
         groups,
         activeGroupId: activeGroup?.id ?? null,
@@ -1119,10 +1762,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         setActiveGroupId,
         allGames,
         library,
+        libraryCount,
         sessions,
         playLogs,
         lastBggSyncLabel,
         refreshAll,
+        ensureLibraryLoaded,
+        ensurePlayLogsLoaded,
+        ensureGroupStatsLoaded,
         createGroup,
         joinGroupByCode,
         regenerateInviteCode,

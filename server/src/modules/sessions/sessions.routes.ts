@@ -68,7 +68,12 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/join', async (request) => {
     const { inviteToken, rsvp } = joinSessionSchema.parse(request.body);
-    const session = await joinSessionByInviteToken(request.user.sub, inviteToken, rsvp);
+    const session = await joinSessionByInviteToken(
+      request.user.sub,
+      inviteToken,
+      rsvp,
+      getSessionScope(request),
+    );
     return { session };
   });
 
@@ -119,8 +124,8 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     async (request) => {
       const { sessionId } = sessionIdParamsSchema.parse(request.params);
       const input = updateSessionSchema.parse(request.body);
-      const session = await updateSession(request.user.sub, sessionId, input);
-      return { session };
+      const sessionPatch = await updateSession(request.user.sub, sessionId, input);
+      return { sessionPatch };
     },
   );
 
@@ -137,13 +142,13 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   app.patch('/:sessionId/rsvp', async (request) => {
     const { sessionId } = sessionIdParamsSchema.parse(request.params);
     const { rsvp } = updateRsvpSchema.parse(request.body);
-    const session = await updateParticipantRsvp(
+    const rsvpDelta = await updateParticipantRsvp(
       request.user.sub,
       sessionId,
       rsvp,
       getSessionScope(request),
     );
-    return { session };
+    return { rsvpDelta };
   });
 
   app.patch(
@@ -152,8 +157,8 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     async (request) => {
       const { sessionId } = sessionIdParamsSchema.parse(request.params);
       const { status } = updateSessionStatusSchema.parse(request.body);
-      const session = await updateSessionStatus(request.user.sub, sessionId, status);
-      return { session };
+      const sessionPatch = await updateSessionStatus(request.user.sub, sessionId, status);
+      return { sessionPatch };
     },
   );
 
@@ -171,13 +176,13 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   app.post('/:sessionId/proposals', async (request, reply) => {
     const { sessionId } = sessionIdParamsSchema.parse(request.params);
     const input = createProposalSchema.parse(request.body);
-    const session = await proposeGameForSession(
+    const delta = await proposeGameForSession(
       request.user.sub,
       sessionId,
       input,
       getSessionScope(request),
     );
-    return reply.status(201).send({ session });
+    return reply.status(201).send(delta);
   });
 
   app.patch(
@@ -186,25 +191,24 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     async (request) => {
       const { sessionId, proposalId } = proposalParamsSchema.parse(request.params);
       const { status } = updateProposalStatusSchema.parse(request.body);
-      const session = await updateProposalStatus(
+      const delta = await updateProposalStatus(
         request.user.sub,
         sessionId,
         proposalId,
         status,
       );
-      return { session };
+      return delta;
     },
   );
 
   app.delete('/:sessionId/proposals/:proposalId', async (request) => {
     const { sessionId, proposalId } = proposalParamsSchema.parse(request.params);
-    const { session, refundedVotesCount } = await deleteSessionProposal(
+    return deleteSessionProposal(
       request.user.sub,
       sessionId,
       proposalId,
       getSessionScope(request),
     );
-    return { session, refundedVotesCount };
   });
 
   app.post('/:sessionId/proposals/:proposalId/vote', async (request) => {

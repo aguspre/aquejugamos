@@ -121,6 +121,8 @@ export interface GameSession {
   inviteToken: string;
   series?: SessionSeriesSummary | null;
   seriesHistory?: SessionSeriesHistoryItem[];
+  isDetailLoaded?: boolean;
+  detailLoadedAt?: number;
   participants: SessionParticipant[];
   proposals: SessionProposal[];
 }

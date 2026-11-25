@@ -93,14 +93,17 @@ export async function listPlayLogs(userId: string, query: ListPlayLogsQuery) {
     await assertSessionAccess(userId, query.sessionId);
   }
 
-  const userGroupIds = (
-    await prisma.groupMember.findMany({
-      where: { userId },
-      select: { groupId: true },
-    })
-  ).map((m) => m.groupId);
+  const userGroupIds = !query.groupId && !query.sessionId
+    ? (
+        await prisma.groupMember.findMany({
+          where: { userId },
+          select: { groupId: true },
+        })
+      ).map((m) => m.groupId)
+    : [];
 
   const logs = await prisma.playLog.findMany({
+    relationLoadStrategy: 'join',
     where: {
       ...(query.groupId ? { groupId: query.groupId } : {}),
       ...(query.sessionId ? { sessionId: query.sessionId } : {}),
@@ -164,6 +167,7 @@ export async function createPlayLog(userId: string, input: CreatePlayLogInput) {
   }
 
   const created = await prisma.playLog.create({
+    relationLoadStrategy: 'join',
     data: {
       sessionId: input.sessionId ?? null,
       groupId: resolvedGroupId,
@@ -218,19 +222,97 @@ export async function deletePlayLog(userId: string, playLogId: string): Promise<
   await prisma.playLog.delete({ where: { id: playLogId } });
 }
 
+const SHELF_OF_SHAME_PREVIEW_LIMIT = 12;
+
 export async function getGroupStats(userId: string, groupId: string) {
   await assertGroupMember(userId, groupId);
 
-  const [members, logs] = await Promise.all([
+  const [
+    members,
+    totalsAgg,
+    topGamesGrouped,
+    playerWinRows,
+    shelfTotalRows,
+    shelfTopGameRows,
+  ] = await Promise.all([
     prisma.groupMember.findMany({
+      relationLoadStrategy: 'join',
       where: { groupId },
       include: { user: { select: USER_SUMMARY_SELECT } },
       orderBy: { joinedAt: 'asc' },
     }),
-    prisma.playLog.findMany({
+    prisma.playLog.aggregate({
       where: { groupId },
-      include: {
-        game: {
+      _count: { _all: true },
+      _sum: { durationMinutes: true },
+    }),
+    prisma.playLog.groupBy({
+      by: ['gameId'],
+      where: { groupId },
+      _count: { gameId: true },
+      _max: { playedAt: true },
+      orderBy: [{ _count: { gameId: 'desc' } }, { _max: { playedAt: 'desc' } }],
+      take: 10,
+    }),
+    prisma.$queryRaw<{ userId: string; playedCount: number; winsCount: number }[]>`
+      SELECT
+        plp.user_id AS "userId",
+        COUNT(*)::int AS "playedCount",
+        COUNT(*) FILTER (WHERE plp.is_winner = true)::int AS "winsCount"
+      FROM play_log_players plp
+      INNER JOIN play_logs pl ON pl.id = plp.play_log_id
+      WHERE pl.group_id = ${groupId}::uuid
+      GROUP BY plp.user_id
+    `,
+    prisma.$queryRaw<{ total: number }[]>`
+      SELECT COUNT(DISTINCT ug.game_id)::int AS "total"
+      FROM group_members gm
+      INNER JOIN user_games ug
+        ON ug.user_id = gm.user_id
+       AND ug.status = 'owned'::"UserGameStatus"
+      INNER JOIN games g
+        ON g.id = ug.game_id
+       AND g.is_expansion = false
+      WHERE gm.group_id = ${groupId}::uuid
+        AND NOT EXISTS (
+          SELECT 1
+          FROM play_logs pl
+          WHERE pl.group_id = ${groupId}::uuid
+            AND pl.game_id = ug.game_id
+        )
+    `,
+    prisma.$queryRaw<{ gameId: string }[]>`
+      SELECT g.id AS "gameId"
+      FROM games g
+      WHERE g.is_expansion = false
+        AND EXISTS (
+          SELECT 1
+          FROM group_members gm
+          INNER JOIN user_games ug
+            ON ug.user_id = gm.user_id
+           AND ug.status = 'owned'::"UserGameStatus"
+          WHERE gm.group_id = ${groupId}::uuid
+            AND ug.game_id = g.id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM play_logs pl
+          WHERE pl.group_id = ${groupId}::uuid
+            AND pl.game_id = g.id
+        )
+      ORDER BY g.bgg_rating DESC NULLS LAST, g.name ASC
+      LIMIT ${SHELF_OF_SHAME_PREVIEW_LIMIT}
+    `,
+  ]);
+
+  const memberIds = members.map((m) => m.userId);
+  const topGameIds = topGamesGrouped.map((row) => row.gameId);
+  const shelfGameIds = shelfTopGameRows.map((row) => row.gameId);
+
+  const [topGamesRecords, shelfGamesRecords] = await Promise.all([
+    topGameIds.length > 0
+      ? prisma.game.findMany({
+          where: { id: { in: topGameIds } },
           select: {
             id: true,
             bggId: true,
@@ -238,97 +320,64 @@ export async function getGroupStats(userId: string, groupId: string) {
             thumbnailUrl: true,
             imageUrl: true,
           },
-        },
-        players: {
-          select: { userId: true, isWinner: true },
-        },
-      },
-      orderBy: { playedAt: 'desc' },
-    }),
-  ]);
-
-  const memberIds = members.map((m) => m.userId);
-
-  const ownedRows =
-    memberIds.length > 0
-      ? await prisma.userGame.findMany({
-          where: {
-            userId: { in: memberIds },
-            status: UserGameStatus.owned,
-            game: { isExpansion: false },
-          },
-          include: {
-            user: { select: USER_SUMMARY_SELECT },
-            game: {
+        })
+      : Promise.resolve([]),
+    shelfGameIds.length > 0 && memberIds.length > 0
+      ? prisma.game.findMany({
+          relationLoadStrategy: 'join',
+          where: { id: { in: shelfGameIds } },
+          select: {
+            id: true,
+            bggId: true,
+            name: true,
+            yearPublished: true,
+            thumbnailUrl: true,
+            imageUrl: true,
+            minPlayers: true,
+            maxPlayers: true,
+            playingTimeMinutes: true,
+            weight: true,
+            bggRating: true,
+            userGames: {
+              where: {
+                userId: { in: memberIds },
+                status: UserGameStatus.owned,
+              },
               select: {
-                id: true,
-                bggId: true,
-                name: true,
-                yearPublished: true,
-                thumbnailUrl: true,
-                imageUrl: true,
-                minPlayers: true,
-                maxPlayers: true,
-                playingTimeMinutes: true,
-                weight: true,
-                bggRating: true,
+                user: { select: USER_SUMMARY_SELECT },
               },
             },
           },
         })
-      : [];
+      : Promise.resolve([]),
+  ]);
 
-  let totalDurationMinutes = 0;
-  const playsByGame = new Map<
-    string,
-    {
-      game: (typeof logs)[number]['game'];
-      playCount: number;
-      lastPlayedAt: Date;
-    }
-  >();
+  const topGameById = new Map(topGamesRecords.map((g) => [g.id, g]));
+  const mostPlayedGames = topGamesGrouped
+    .map((entry) => {
+      const game = topGameById.get(entry.gameId);
+      if (!game || !entry._max.playedAt) return null;
+      return {
+        game,
+        playCount: entry._count.gameId,
+        lastPlayedAt: entry._max.playedAt,
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null);
 
-  const playerStats = new Map<string, { playedCount: number; winsCount: number }>();
-  for (const m of members) {
-    playerStats.set(m.userId, { playedCount: 0, winsCount: 0 });
-  }
-
-  for (const log of logs) {
-    totalDurationMinutes += log.durationMinutes ?? 0;
-
-    const existingGame = playsByGame.get(log.gameId);
-    if (existingGame) {
-      existingGame.playCount += 1;
-      if (log.playedAt > existingGame.lastPlayedAt) {
-        existingGame.lastPlayedAt = log.playedAt;
-      }
-    } else {
-      playsByGame.set(log.gameId, {
-        game: log.game,
-        playCount: 1,
-        lastPlayedAt: log.playedAt,
-      });
-    }
-
-    for (const p of log.players) {
-      const current = playerStats.get(p.userId);
-      if (current) {
-        current.playedCount += 1;
-        if (p.isWinner) current.winsCount += 1;
-      }
-    }
-  }
-
-  const mostPlayedGames = Array.from(playsByGame.values())
-    .sort(
-      (a, b) =>
-        b.playCount - a.playCount || b.lastPlayedAt.getTime() - a.lastPlayedAt.getTime(),
-    )
-    .slice(0, 10);
+  const statsByUserId = new Map(
+    playerWinRows.map((row) => [
+      row.userId,
+      {
+        playedCount: Number(row.playedCount),
+        winsCount: Number(row.winsCount),
+      },
+    ]),
+  );
 
   const winLeaderboard = members
     .map((m) => {
-      const st = playerStats.get(m.userId) ?? { playedCount: 0, winsCount: 0 };
+      const st = statsByUserId.get(m.userId) ?? { playedCount: 0, winsCount: 0 };
       const winRate =
         st.playedCount > 0 ? Math.round((st.winsCount / st.playedCount) * 100) : 0;
       return {
@@ -340,56 +389,30 @@ export async function getGroupStats(userId: string, groupId: string) {
     })
     .sort((a, b) => b.winsCount - a.winsCount || b.winRate - a.winRate);
 
-  const playedGameIds = new Set(logs.map((l) => l.gameId));
-  const unplayedMap = new Map<
-    string,
-    {
-      game: {
-        id: string;
-        bggId: number;
-        name: string;
-        yearPublished: number | null;
-        thumbnailUrl: string | null;
-        imageUrl: string | null;
-        minPlayers: number | null;
-        maxPlayers: number | null;
-        playingTimeMinutes: number | null;
-        weight: number | null;
-        bggRating: number | null;
-      };
-      owners: (typeof members)[number]['user'][];
-    }
-  >();
-
-  for (const row of ownedRows) {
-    if (playedGameIds.has(row.gameId)) continue;
-    const existing = unplayedMap.get(row.gameId);
-    if (!existing) {
-      unplayedMap.set(row.gameId, {
+  const shelfGameById = new Map(shelfGamesRecords.map((g) => [g.id, g]));
+  const shelfOfShame = shelfGameIds
+    .map((gameId) => {
+      const g = shelfGameById.get(gameId);
+      if (!g) return null;
+      const { userGames, ...restGame } = g;
+      return {
         game: {
-          ...row.game,
-          weight: decimalToNumber(row.game.weight),
-          bggRating: decimalToNumber(row.game.bggRating),
+          ...restGame,
+          weight: decimalToNumber(restGame.weight),
+          bggRating: decimalToNumber(restGame.bggRating),
         },
-        owners: [row.user],
-      });
-    } else if (!existing.owners.some((o) => o.id === row.user.id)) {
-      existing.owners.push(row.user);
-    }
-  }
-
-  const shelfOfShame = Array.from(unplayedMap.values()).sort(
-    (a, b) =>
-      (b.game.bggRating ?? 0) - (a.game.bggRating ?? 0) ||
-      a.game.name.localeCompare(b.game.name, 'es'),
-  );
+        owners: userGames.map((ug) => ug.user),
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null);
 
   return {
     groupId,
-    totalPlays: logs.length,
-    totalDurationMinutes,
+    totalPlays: totalsAgg._count._all,
+    totalDurationMinutes: totalsAgg._sum.durationMinutes ?? 0,
     mostPlayedGames,
     winLeaderboard,
+    shelfOfShameTotalCount: Number(shelfTotalRows[0]?.total ?? shelfOfShame.length),
     shelfOfShame,
   };
 }

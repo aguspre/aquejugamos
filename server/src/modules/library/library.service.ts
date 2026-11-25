@@ -60,6 +60,7 @@ export async function listUserLibrary(userId: string, filters: ListLibraryQuery)
   };
 
   const entries = await prisma.userGame.findMany({
+    relationLoadStrategy: 'join',
     where: {
       userId,
       ...(filters.status ? { status: filters.status } : {}),

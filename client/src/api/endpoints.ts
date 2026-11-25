@@ -9,13 +9,18 @@ import type {
 } from '../types/domain';
 import { apiRequest } from './client';
 import type {
+  ApiDeleteProposalDelta,
   ApiGroup,
   ApiGroupStats,
   ApiLibraryItem,
   ApiPlayLog,
   ApiPoolGame,
+  ApiProposalStatusDelta,
+  ApiProposeGameDelta,
   ApiSessionDetail,
   ApiSessionListItem,
+  ApiSessionMetadataPatch,
+  ApiSessionRsvpDelta,
   ApiSessionSeriesSummary,
   ApiSessionVotesSnapshot,
   ApiUserSummary,
@@ -26,6 +31,100 @@ export interface AuthUserResponse extends ApiUserSummary {
   firebaseUid?: string | null;
   lastBggSyncAt: string | null;
   createdAt: string;
+  isAdmin?: boolean;
+}
+
+export interface BootstrapResponse {
+  user: AuthUserResponse;
+  isGuest: boolean;
+  guestScope: GuestScope | null;
+  groups: ApiGroup[];
+  sessions: ApiSessionListItem[];
+  libraryCount: number;
+}
+
+export interface BackendRouteMetric {
+  key: string;
+  method: string;
+  route: string;
+  count: number;
+  error4xxCount: number;
+  error5xxCount: number;
+  avgMs: number;
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  maxMs: number;
+  avgDbQueries: number;
+  avgDbMs: number;
+  avgPayloadBytes: number;
+  totalPayloadBytes: number;
+  totalWireBytes: number;
+}
+
+export interface BackendStatusMetricsResponse {
+  status: 'ok' | 'degraded' | 'down';
+  timestamp: string;
+  uptimeSeconds: number;
+  startedAt: string;
+  windowMinutes: number;
+  health: {
+    db: {
+      ok: boolean;
+      pingMs: number;
+      pooled: boolean;
+      hasDirectUrlConfigured: boolean;
+      dbRegionHint: string | null;
+      serverRegionHint: string | null;
+      regionMismatchWarning: string | null;
+      coldStartSuspected: boolean;
+    };
+    firebaseAdmin: boolean;
+    corsMaxAgeSeconds: number;
+    compressionEnabled: boolean;
+  };
+  summary: {
+    totalRequests: number;
+    error4xxCount: number;
+    error5xxCount: number;
+    p50Ms: number;
+    p95Ms: number;
+    p99Ms: number;
+    maxMs: number;
+    totalPayloadBytes: number;
+    totalWireBytes: number;
+    compressionSavedBytes: number;
+  };
+  process: {
+    nodeVersion: string;
+    rssMb: number;
+    heapUsedMb: number;
+    heapTotalMb: number;
+    eventLoopLagMs: {
+      mean: number;
+      p50: number;
+      p95: number;
+      p99: number;
+      max: number;
+    } | null;
+  };
+  routes: BackendRouteMetric[];
+  recentNotableRequests: {
+    requestId: string;
+    timestamp: string;
+    method: string;
+    route: string;
+    statusCode: number;
+    totalMs: number;
+    authMs: number;
+    dbMs: number;
+    dbQueryCount: number;
+    slowQueries: { target: string; durationMs: number }[];
+    payloadBytes: number;
+    wireBytes: number;
+    encoding: 'br' | 'gzip' | 'identity';
+    errorCode?: string;
+  }[];
 }
 
 export interface InvitePreviewGroup {
@@ -165,6 +264,20 @@ export const authApi = {
       authToken,
     }),
 
+  bootstrap: (
+    payload?: {
+      displayName?: string;
+      avatarUrl?: string | null;
+      bggUsername?: string | null;
+    },
+    authToken?: string,
+  ) =>
+    apiRequest<BootstrapResponse>('/api/auth/bootstrap', {
+      method: 'POST',
+      body: payload ?? {},
+      authToken,
+    }),
+
   updateMe: (payload: {
     displayName?: string;
     avatarUrl?: string | null;
@@ -258,8 +371,24 @@ export const groupsApi = {
     }),
 
   removeMember: (groupId: string, userId: string) =>
-    apiRequest<{ groupDeleted: boolean }>(`/api/groups/${groupId}/members/${userId}`, {
-      method: 'DELETE',
+    apiRequest<{ groupDeleted: boolean; group?: ApiGroup }>(
+      `/api/groups/${groupId}/members/${userId}`,
+      {
+        method: 'DELETE',
+      },
+    ),
+};
+
+export const statusApi = {
+  getHealth: () =>
+    apiRequest<{
+      status: 'ok' | 'degraded' | 'down';
+      timestamp: string;
+    }>('/api/health'),
+
+  getMetrics: (fresh = false) =>
+    apiRequest<BackendStatusMetricsResponse>('/api/status/metrics', {
+      query: fresh ? { fresh: '1' } : undefined,
     }),
 };
 
@@ -294,7 +423,7 @@ export const sessionsApi = {
       maxProposalsPerUser?: number | null;
     },
   ) =>
-    apiRequest<{ session: ApiSessionDetail }>(`/api/sessions/${sessionId}`, {
+    apiRequest<{ sessionPatch: ApiSessionMetadataPatch }>(`/api/sessions/${sessionId}`, {
       method: 'PATCH',
       body: payload,
     }),
@@ -337,16 +466,19 @@ export const sessionsApi = {
     }),
 
   updateRsvp: (sessionId: string, rsvp: RsvpStatus) =>
-    apiRequest<{ session: ApiSessionDetail }>(`/api/sessions/${sessionId}/rsvp`, {
+    apiRequest<{ rsvpDelta: ApiSessionRsvpDelta }>(`/api/sessions/${sessionId}/rsvp`, {
       method: 'PATCH',
       body: { rsvp },
     }),
 
   updateStatus: (sessionId: string, status: SessionStatus) =>
-    apiRequest<{ session: ApiSessionDetail }>(`/api/sessions/${sessionId}/status`, {
-      method: 'PATCH',
-      body: { status },
-    }),
+    apiRequest<{ sessionPatch: { id: string; status: SessionStatus } }>(
+      `/api/sessions/${sessionId}/status`,
+      {
+        method: 'PATCH',
+        body: { status },
+      },
+    ),
 
   getPool: (
     sessionId: string,
@@ -370,7 +502,7 @@ export const sessionsApi = {
     }),
 
   propose: (sessionId: string, gameId: string, note?: string) =>
-    apiRequest<{ session: ApiSessionDetail }>(`/api/sessions/${sessionId}/proposals`, {
+    apiRequest<ApiProposeGameDelta>(`/api/sessions/${sessionId}/proposals`, {
       method: 'POST',
       body: { gameId, note: note?.trim() || null },
     }),
@@ -380,7 +512,7 @@ export const sessionsApi = {
     proposalId: string,
     status: ProposalStatus,
   ) =>
-    apiRequest<{ session: ApiSessionDetail }>(
+    apiRequest<ApiProposalStatusDelta>(
       `/api/sessions/${sessionId}/proposals/${proposalId}/status`,
       {
         method: 'PATCH',
@@ -389,7 +521,7 @@ export const sessionsApi = {
     ),
 
   removeProposal: (sessionId: string, proposalId: string) =>
-    apiRequest<{ session: ApiSessionDetail; refundedVotesCount?: number }>(
+    apiRequest<ApiDeleteProposalDelta>(
       `/api/sessions/${sessionId}/proposals/${proposalId}`,
       { method: 'DELETE' },
     ),

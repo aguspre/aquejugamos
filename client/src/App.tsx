@@ -22,6 +22,7 @@ import { HistoryPage } from './pages/HistoryPage';
 import { LibraryPage } from './pages/LibraryPage';
 import { SessionRoomPage } from './pages/SessionRoomPage';
 import { SessionsHubPage } from './pages/SessionsHubPage';
+import { StatusMonitorPage } from './pages/StatusMonitorPage';
 import { WelcomePage } from './pages/WelcomePage';
 
 function RootRoute() {
@@ -192,6 +193,7 @@ export function App() {
               <Route path="/library" element={<LibraryPage />} />
               <Route path="/history" element={<HistoryPage />} />
               <Route path="/groups" element={<GroupsPage />} />
+              <Route path="/status" element={<StatusMonitorPage />} />
               <Route path="/preview" element={<DesignSystemPreview />} />
             </Route>
 

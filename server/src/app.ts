@@ -4,8 +4,6 @@ import { Prisma } from '@prisma/client';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import { getEnv } from './config/env.js';
-import { isFirebaseAdminConfigured } from './config/firebase.js';
-import { prisma } from './config/prisma.js';
 import { authenticate } from './middleware/auth.js';
 import { authRoutes } from './modules/auth/auth.routes.js';
 import { bggRoutes } from './modules/bgg/bgg.routes.js';
@@ -13,27 +11,49 @@ import { groupRoutes } from './modules/groups/groups.routes.js';
 import { libraryRoutes } from './modules/library/library.routes.js';
 import { playLogRoutes } from './modules/play-logs/play-logs.routes.js';
 import { sessionRoutes } from './modules/sessions/sessions.routes.js';
-import { AppError } from './utils/errors.js';
+import { statusRoutes } from './modules/status/status.routes.js';
+import { registerTelemetryAndCompression } from './telemetry/fastifyPlugin.js';
+import { isAppError } from './utils/errors.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
   const env = getEnv();
 
   const app = Fastify({
+    disableRequestLogging: true,
     logger:
       env.NODE_ENV === 'test'
         ? false
         : {
-            level: env.NODE_ENV === 'development' ? 'info' : 'warn',
+            level: env.LOG_LEVEL ?? 'info',
+            redact: {
+              paths: [
+                'req.headers.authorization',
+                'req.headers.cookie',
+                'req.headers["x-admin-token"]',
+              ],
+              censor: '[REDACTED]',
+            },
           },
   });
 
+  registerTelemetryAndCompression(app);
+
   const allowedOrigins = env.CORS_ORIGIN.split(',')
     .map((origin) => origin.trim().replace(/\/+$/, ''))
-    .filter(Boolean);
+    .filter((origin) => Boolean(origin) && origin !== '*');
 
   await app.register(cors, {
-    origin: allowedOrigins.length <= 1 ? allowedOrigins[0] ?? true : allowedOrigins,
+    origin: allowedOrigins.length <= 1 ? allowedOrigins[0] ?? false : allowedOrigins,
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
+      'x-request-id',
+      'x-admin-token',
+    ],
+    exposedHeaders: ['Server-Timing', 'x-request-id', 'Retry-After'],
+    maxAge: 86400,
     credentials: true,
   });
 
@@ -44,7 +64,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   app.decorate('authenticate', authenticate);
 
   app.setErrorHandler((error, request, reply) => {
-    if (error instanceof AppError) {
+    if (isAppError(error)) {
+      reply.telemetryErrorCode = error.code;
       if (
         error.statusCode === 429 &&
         error.details &&
@@ -72,6 +93,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     }
 
     if (error instanceof ZodError) {
+      reply.telemetryErrorCode = 'VALIDATION_ERROR';
       return reply.status(400).send({
         error: {
           code: 'VALIDATION_ERROR',
@@ -86,6 +108,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       if (error.code === 'P2002') {
+        reply.telemetryErrorCode = 'UNIQUE_CONSTRAINT_VIOLATION';
         return reply.status(409).send({
           error: {
             code: 'UNIQUE_CONSTRAINT_VIOLATION',
@@ -94,6 +117,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         });
       }
       if (error.code === 'P2025') {
+        reply.telemetryErrorCode = 'NOT_FOUND';
         return reply.status(404).send({
           error: {
             code: 'NOT_FOUND',
@@ -103,6 +127,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       }
     }
 
+    reply.telemetryErrorCode = 'INTERNAL_SERVER_ERROR';
     request.log.error(error);
     return reply.status(500).send({
       error: {
@@ -112,15 +137,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     });
   });
 
-  app.get('/api/health', async () => {
-    await prisma.$queryRaw`SELECT 1`;
-    return {
-      status: 'ok',
-      firebaseAdmin: isFirebaseAdminConfigured(),
-      timestamp: new Date().toISOString(),
-    };
-  });
-
+  await app.register(statusRoutes);
   await app.register(authRoutes, { prefix: '/api/auth' });
   await app.register(bggRoutes, { prefix: '/api/bgg' });
   await app.register(libraryRoutes, { prefix: '/api/library' });

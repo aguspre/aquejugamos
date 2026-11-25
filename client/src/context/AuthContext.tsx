@@ -29,6 +29,7 @@ import {
 import {
   authApi,
   type AuthUserResponse,
+  type BootstrapResponse,
   type GuestScope,
 } from "../api/endpoints";
 import { firebaseAuth, googleProvider } from "../lib/firebase";
@@ -51,9 +52,17 @@ interface GuestJoinInput {
   seriesShareToken?: string;
 }
 
+export interface InitialBootstrapPayload {
+  version: number;
+  groups: BootstrapResponse["groups"];
+  sessions: BootstrapResponse["sessions"];
+  libraryCount: number;
+}
+
 interface AuthContextValue {
   firebaseUser: FirebaseUser | null;
   backendUser: BackendUserProfile | null;
+  initialBootstrap: InitialBootstrapPayload | null;
   backendSyncStatus: BackendSyncStatus;
   backendSyncError: string | null;
   backendSyncSlow: boolean;
@@ -175,6 +184,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     useState<BackendUserProfile | null>(null);
   const [guestUser, setGuestUser] = useState<BackendUserProfile | null>(null);
   const [guestScope, setGuestScope] = useState<GuestScope | null>(null);
+  const [initialBootstrap, setInitialBootstrap] =
+    useState<InitialBootstrapPayload | null>(null);
+  const bootstrapVersionRef = useRef(0);
   const [backendSyncStatus, setBackendSyncStatus] =
     useState<BackendSyncStatus>("idle");
   const [backendSyncError, setBackendSyncError] = useState<string | null>(null);
@@ -245,10 +257,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               const token = await user.getIdToken(shouldForceRefresh);
               if (syncRunIdRef.current !== runId) return;
 
-              const { user: synced } = await authApi.sync(overrides, token);
+              const bootstrapped = await authApi.bootstrap(overrides, token);
               if (syncRunIdRef.current !== runId) return;
 
-              setRegisteredUser(synced);
+              setRegisteredUser(bootstrapped.user);
+              setInitialBootstrap({
+                version: ++bootstrapVersionRef.current,
+                groups: bootstrapped.groups,
+                sessions: bootstrapped.sessions,
+                libraryCount: bootstrapped.libraryCount,
+              });
               setBackendSyncStatus("synced");
               setBackendSyncError(null);
               return;
@@ -327,6 +345,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       syncRunIdRef.current += 1;
       syncInFlightRef.current = null;
       setRegisteredUser(null);
+      setInitialBootstrap(null);
       setBackendSyncStatus("idle");
       setBackendSyncError(null);
       setBackendSyncSlow(false);
@@ -340,12 +359,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       void authApi
-        .me()
+        .bootstrap()
         .then((res) => {
           if (!active) return;
           if (res.isGuest) {
             setGuestUser(res.user);
             setGuestScope(res.guestScope ?? null);
+            setInitialBootstrap({
+              version: ++bootstrapVersionRef.current,
+              groups: [],
+              sessions: res.sessions,
+              libraryCount: 0,
+            });
           } else {
             clearGuestState();
           }
@@ -478,6 +503,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const exitGuestSession = useCallback(() => {
     clearGuestState();
+    setInitialBootstrap(null);
   }, [clearGuestState]);
 
   const sendPasswordReset = useCallback(async (email: string) => {
@@ -492,6 +518,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     clearGuestState();
     setRegisteredUser(null);
+    setInitialBootstrap(null);
     setBackendSyncStatus("idle");
     setBackendSyncError(null);
     setBackendSyncSlow(false);
@@ -537,6 +564,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       firebaseUser,
       backendUser,
+      initialBootstrap,
       backendSyncStatus,
       backendSyncError,
       backendSyncSlow,
@@ -562,6 +590,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [
       firebaseUser,
       backendUser,
+      initialBootstrap,
       backendSyncStatus,
       backendSyncError,
       backendSyncSlow,

@@ -1,6 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { getEnv } from '../../config/env.js';
+import { prisma } from '../../config/prisma.js';
 import { authenticate, requireRegisteredUser } from '../../middleware/auth.js';
+import { listUserGroups } from '../groups/groups.service.js';
+import { listUserSessions } from '../sessions/sessions.service.js';
 import {
   googleAuthSchema,
   guestJoinSchema,
@@ -100,20 +103,83 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         input.avatarUrl !== undefined ||
         input.bggUsername !== undefined;
 
+      const emailVerified = Boolean(request.user.emailVerified);
       const user = hasUpdates
-        ? await updateUserProfile(request.user.sub, input)
+        ? await updateUserProfile(request.user.sub, input, { emailVerified })
         : request.syncedUser
-          ? toPublicUser(request.syncedUser)
-          : await getUserProfile(request.user.sub);
+          ? toPublicUser(request.syncedUser, { emailVerified })
+          : await getUserProfile(request.user.sub, { emailVerified });
 
       return { user };
     },
   );
 
+  app.post('/bootstrap', { preHandler: [authenticate] }, async (request) => {
+    const isGuest = Boolean(request.user.isGuest);
+
+    if (isGuest) {
+      const guestScope = {
+        kind: request.user.guestGroupId ? ('group' as const) : ('session' as const),
+        groupId: request.user.guestGroupId ?? null,
+        sessionId: request.user.guestSessionId ?? null,
+        groupName: request.user.guestGroupName ?? null,
+      };
+      const sessionScope = {
+        isGuest: true,
+        guestGroupId: request.user.guestGroupId,
+        guestSessionId: request.user.guestSessionId,
+      };
+
+      const [user, sessions] = await Promise.all([
+        getUserProfile(request.user.sub),
+        listUserSessions(request.user.sub, {}, sessionScope),
+      ]);
+
+      return {
+        user,
+        isGuest: true,
+        guestScope,
+        groups: [],
+        sessions,
+        libraryCount: 0,
+      };
+    }
+
+    const input = syncProfileSchema.parse(request.body ?? {});
+    const hasUpdates =
+      input.displayName !== undefined ||
+      input.avatarUrl !== undefined ||
+      input.bggUsername !== undefined;
+    const emailVerified = Boolean(request.user.emailVerified);
+
+    // Commit profile updates BEFORE reading groups/sessions so projected user summaries are fresh
+    const resolvedUser = hasUpdates
+      ? await updateUserProfile(request.user.sub, input, { emailVerified })
+      : request.syncedUser
+        ? toPublicUser(request.syncedUser, { emailVerified })
+        : await getUserProfile(request.user.sub, { emailVerified });
+
+    const [groups, sessions, libraryCount] = await Promise.all([
+      listUserGroups(request.user.sub),
+      listUserSessions(request.user.sub, {}),
+      prisma.userGame.count({ where: { userId: request.user.sub } }),
+    ]);
+
+    return {
+      user: resolvedUser,
+      isGuest: false,
+      guestScope: null,
+      groups,
+      sessions,
+      libraryCount,
+    };
+  });
+
   app.get('/me', { preHandler: [authenticate] }, async (request) => {
+    const emailVerified = Boolean(request.user.emailVerified);
     const user = request.syncedUser
-      ? toPublicUser(request.syncedUser)
-      : await getUserProfile(request.user.sub);
+      ? toPublicUser(request.syncedUser, { emailVerified })
+      : await getUserProfile(request.user.sub, { emailVerified });
     const isGuest = Boolean(request.user.isGuest);
     const guestScope = isGuest
       ? {
@@ -132,7 +198,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     { preHandler: [authenticate, requireRegisteredUser] },
     async (request) => {
       const input = updateProfileSchema.parse(request.body);
-      const user = await updateUserProfile(request.user.sub, input);
+      const emailVerified = Boolean(request.user.emailVerified);
+      const user = await updateUserProfile(request.user.sub, input, { emailVerified });
       return { user };
     },
   );

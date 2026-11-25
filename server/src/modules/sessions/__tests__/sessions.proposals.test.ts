@@ -14,6 +14,7 @@ const sessionProposalFindManyMock = vi.fn();
 const sessionProposalFindUniqueMock = vi.fn();
 const sessionProposalCountMock = vi.fn();
 const sessionProposalCreateMock = vi.fn();
+const sessionParticipantFindManyMock = vi.fn();
 const sessionFindUniqueMock = vi.fn();
 const userGameFindManyMock = vi.fn();
 
@@ -35,6 +36,7 @@ const txMock = {
   },
   sessionProposal: {
     delete: (...args: unknown[]) => sessionProposalDeleteMock(...args),
+    findMany: (...args: unknown[]) => sessionProposalFindManyMock(...args),
     findUnique: (...args: unknown[]) => sessionProposalFindUniqueMock(...args),
     count: (...args: unknown[]) => sessionProposalCountMock(...args),
     create: (...args: unknown[]) => sessionProposalCreateMock(...args),
@@ -51,6 +53,9 @@ vi.mock('../../../config/prisma.js', () => ({
     }),
     session: {
       findUnique: (...args: unknown[]) => sessionFindUniqueMock(...args),
+    },
+    sessionParticipant: {
+      findMany: (...args: unknown[]) => sessionParticipantFindManyMock(...args),
     },
     sessionProposal: {
       findMany: (...args: unknown[]) => sessionProposalFindManyMock(...args),
@@ -116,12 +121,21 @@ function mockSessionDetailResponse(viewerId: string, role: GroupRole | null = Gr
 describe('deleteSessionProposal (transaccional, permisos y devolución de votos)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionProposalFindManyMock.mockResolvedValue([]);
   });
 
   it('permite al autor quitar su propuesta abierta y devuelve el conteo exacto de votos borrados', async () => {
     queryRawMock
       .mockResolvedValueOnce([
-        { id: SESSION_ID, group_id: GROUP_ID, host_id: HOST_ID, status: SessionStatus.voting },
+        {
+          id: SESSION_ID,
+          group_id: GROUP_ID,
+          host_id: HOST_ID,
+          status: SessionStatus.voting,
+          voting_mode: VotingMode.multi_vote,
+          max_votes_per_user: 3,
+          max_proposals_per_user: null,
+        },
       ])
       .mockResolvedValueOnce([
         { id: PROPOSAL_ID, proposed_by: AUTHOR_ID, status: ProposalStatus.open },
@@ -130,12 +144,13 @@ describe('deleteSessionProposal (transaccional, permisos y devolución de votos)
     groupMemberFindUniqueMock.mockResolvedValue({ role: GroupRole.member });
     sessionVoteDeleteManyMock.mockResolvedValue({ count: 3 });
     sessionProposalDeleteMock.mockResolvedValue({ id: PROPOSAL_ID });
-    mockSessionDetailResponse(AUTHOR_ID);
 
     const result = await deleteSessionProposal(AUTHOR_ID, SESSION_ID, PROPOSAL_ID);
 
+    expect(result.removedProposalId).toBe(PROPOSAL_ID);
     expect(result.refundedVotesCount).toBe(3);
-    expect(result.session.votesRemaining).toBe(3);
+    expect(result.votes.votesRemaining).toBe(3);
+    expect(sessionFindUniqueMock).not.toHaveBeenCalled();
     expect(sessionVoteDeleteManyMock).toHaveBeenCalledWith({
       where: { proposalId: PROPOSAL_ID },
     });
@@ -322,9 +337,37 @@ describe('deleteSessionProposal (transaccional, permisos y devolución de votos)
 
 const GAME_ID = '99999999-9999-4999-8999-999999999999';
 
+const MOCK_GAME_RECORD = {
+  id: GAME_ID,
+  bggId: 13,
+  name: 'Catan',
+  yearPublished: 1995,
+  imageUrl: null,
+  thumbnailUrl: null,
+  minPlayers: 3,
+  maxPlayers: 4,
+  bestPlayers: [4],
+  playingTimeMinutes: 90,
+  weight: null,
+  bggRating: null,
+  isExpansion: false,
+  baseGameBggId: null,
+  mechanics: [],
+};
+
+const MOCK_CREATED_PROPOSAL = {
+  id: PROPOSAL_ID,
+  note: 'Lo llevo yo',
+  status: ProposalStatus.open,
+  acceptedAt: null,
+  createdAt: new Date('2026-11-24T12:00:00Z'),
+  proposer: { id: AUTHOR_ID, displayName: 'Autor', avatarUrl: null, bggUsername: null },
+};
+
 describe('proposeGameForSession (límite opcional de propuestas por integrante)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionParticipantFindManyMock.mockResolvedValue([]);
   });
 
   it('permite proponer cuando no hay límite configurado (maxProposalsPerUser = null)', async () => {
@@ -339,27 +382,30 @@ describe('proposeGameForSession (límite opcional de propuestas por integrante)'
     ]);
     participantFindUniqueMock.mockResolvedValue({ userId: AUTHOR_ID });
     groupMemberFindUniqueMock.mockResolvedValue({ role: GroupRole.member });
-    gameFindUniqueMock.mockResolvedValue({ id: GAME_ID });
+    gameFindUniqueMock.mockResolvedValue(MOCK_GAME_RECORD);
     sessionProposalFindUniqueMock.mockResolvedValue(null);
-    sessionProposalCreateMock.mockResolvedValue({ id: PROPOSAL_ID });
-    mockSessionDetailResponse(AUTHOR_ID);
+    sessionProposalCreateMock.mockResolvedValue(MOCK_CREATED_PROPOSAL);
 
-    const detail = await proposeGameForSession(AUTHOR_ID, SESSION_ID, {
+    const delta = await proposeGameForSession(AUTHOR_ID, SESSION_ID, {
       gameId: GAME_ID,
       note: 'Lo llevo yo',
     });
 
     expect(sessionProposalCountMock).not.toHaveBeenCalled();
-    expect(sessionProposalCreateMock).toHaveBeenCalledWith({
-      data: {
-        sessionId: SESSION_ID,
-        gameId: GAME_ID,
-        proposedBy: AUTHOR_ID,
-        note: 'Lo llevo yo',
-      },
-    });
-    expect(detail.maxProposalsPerUser).toBeNull();
-    expect(detail.proposalsRemaining).toBeNull();
+    expect(sessionFindUniqueMock).not.toHaveBeenCalled();
+    expect(sessionProposalCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          sessionId: SESSION_ID,
+          gameId: GAME_ID,
+          proposedBy: AUTHOR_ID,
+          note: 'Lo llevo yo',
+        },
+      }),
+    );
+    expect(delta.proposal.id).toBe(PROPOSAL_ID);
+    expect(delta.quota.maxProposalsPerUser).toBeNull();
+    expect(delta.quota.proposalsRemaining).toBeNull();
   });
 
   it('permite proponer si el usuario todavía está por debajo de maxProposalsPerUser usando $executeRaw para advisory lock', async () => {
@@ -379,16 +425,15 @@ describe('proposeGameForSession (límite opcional de propuestas por integrante)'
     });
     participantFindUniqueMock.mockResolvedValue({ userId: AUTHOR_ID });
     groupMemberFindUniqueMock.mockResolvedValue({ role: GroupRole.member });
-    gameFindUniqueMock.mockResolvedValue({ id: GAME_ID });
+    gameFindUniqueMock.mockResolvedValue(MOCK_GAME_RECORD);
     sessionProposalFindUniqueMock.mockResolvedValue(null);
     sessionProposalCountMock.mockImplementationOnce(async () => {
       callOrder.push('proposal_count');
       return 1;
     });
-    sessionProposalCreateMock.mockResolvedValue({ id: PROPOSAL_ID });
-    mockSessionDetailResponse(AUTHOR_ID);
+    sessionProposalCreateMock.mockResolvedValue(MOCK_CREATED_PROPOSAL);
 
-    await proposeGameForSession(AUTHOR_ID, SESSION_ID, { gameId: GAME_ID });
+    const delta = await proposeGameForSession(AUTHOR_ID, SESSION_ID, { gameId: GAME_ID });
 
     expect(executeRawMock).toHaveBeenCalledTimes(1);
     expect(callOrder).toEqual(['advisory_lock', 'proposal_count']);
@@ -396,6 +441,11 @@ describe('proposeGameForSession (límite opcional de propuestas por integrante)'
       where: { sessionId: SESSION_ID, proposedBy: AUTHOR_ID },
     });
     expect(sessionProposalCreateMock).toHaveBeenCalledTimes(1);
+    expect(delta.quota).toEqual({
+      maxProposalsPerUser: 2,
+      userProposalsCount: 2,
+      proposalsRemaining: 0,
+    });
   });
 
   it('rechaza con 400 MAX_PROPOSALS_REACHED (con details) cuando el usuario alcanzó el límite configurado', async () => {
@@ -411,7 +461,7 @@ describe('proposeGameForSession (límite opcional de propuestas por integrante)'
     executeRawMock.mockResolvedValueOnce(1);
     participantFindUniqueMock.mockResolvedValue({ userId: AUTHOR_ID });
     groupMemberFindUniqueMock.mockResolvedValue({ role: GroupRole.member });
-    gameFindUniqueMock.mockResolvedValue({ id: GAME_ID });
+    gameFindUniqueMock.mockResolvedValue(MOCK_GAME_RECORD);
     sessionProposalFindUniqueMock.mockResolvedValue(null);
     sessionProposalCountMock.mockResolvedValue(2);
 
@@ -441,7 +491,7 @@ describe('proposeGameForSession (límite opcional de propuestas por integrante)'
     executeRawMock.mockResolvedValueOnce(1);
     participantFindUniqueMock.mockResolvedValue({ userId: AUTHOR_ID });
     groupMemberFindUniqueMock.mockResolvedValue({ role: GroupRole.member });
-    gameFindUniqueMock.mockResolvedValue({ id: GAME_ID });
+    gameFindUniqueMock.mockResolvedValue(MOCK_GAME_RECORD);
     sessionProposalFindUniqueMock.mockResolvedValue({ id: PROPOSAL_ID });
     sessionProposalCountMock.mockResolvedValue(1);
 
@@ -524,18 +574,27 @@ describe('proposeGameForSession (límite opcional de propuestas por integrante)'
     executeRawMock.mockResolvedValueOnce(1);
     participantFindUniqueMock.mockResolvedValue(null);
     groupMemberFindUniqueMock.mockResolvedValue(null);
-    gameFindUniqueMock.mockResolvedValue({ id: GAME_ID });
+    gameFindUniqueMock.mockResolvedValue(MOCK_GAME_RECORD);
     sessionProposalFindUniqueMock.mockResolvedValue(null);
     sessionProposalCountMock.mockResolvedValue(0);
     participantUpsertMock.mockResolvedValue({ sessionId: SESSION_ID, userId: GUEST_ID });
-    sessionProposalCreateMock.mockResolvedValue({ id: PROPOSAL_ID });
-    mockSessionDetailResponse(GUEST_ID, null);
+    sessionProposalCreateMock.mockResolvedValue({
+      ...MOCK_CREATED_PROPOSAL,
+      proposer: { id: GUEST_ID, displayName: 'Invitado', avatarUrl: null, bggUsername: null },
+    });
 
-    await proposeGameForSession(GUEST_ID, SESSION_ID, { gameId: GAME_ID }, guestScope);
+    const guestDelta = await proposeGameForSession(
+      GUEST_ID,
+      SESSION_ID,
+      { gameId: GAME_ID },
+      guestScope,
+    );
     expect(participantUpsertMock).toHaveBeenCalledTimes(1);
+    expect(guestDelta.addedParticipant?.user.id).toBe(GUEST_ID);
 
     // Invitado que ya participa -> NO ejecuta upsert redundante
     vi.clearAllMocks();
+    sessionParticipantFindManyMock.mockResolvedValue([]);
     queryRawMock.mockResolvedValueOnce([
       {
         id: SESSION_ID,
@@ -548,14 +607,19 @@ describe('proposeGameForSession (límite opcional de propuestas por integrante)'
     executeRawMock.mockResolvedValueOnce(1);
     participantFindUniqueMock.mockResolvedValue({ userId: GUEST_ID });
     groupMemberFindUniqueMock.mockResolvedValue(null);
-    gameFindUniqueMock.mockResolvedValue({ id: GAME_ID });
+    gameFindUniqueMock.mockResolvedValue(MOCK_GAME_RECORD);
     sessionProposalFindUniqueMock.mockResolvedValue(null);
     sessionProposalCountMock.mockResolvedValue(1);
-    sessionProposalCreateMock.mockResolvedValue({ id: PROPOSAL_ID });
-    mockSessionDetailResponse(GUEST_ID, null);
+    sessionProposalCreateMock.mockResolvedValue(MOCK_CREATED_PROPOSAL);
 
-    await proposeGameForSession(GUEST_ID, SESSION_ID, { gameId: GAME_ID }, guestScope);
+    const secondDelta = await proposeGameForSession(
+      GUEST_ID,
+      SESSION_ID,
+      { gameId: GAME_ID },
+      guestScope,
+    );
     expect(participantUpsertMock).not.toHaveBeenCalled();
+    expect(secondDelta.addedParticipant).toBeUndefined();
 
     // Invitado fuera de alcance -> 403
     vi.clearAllMocks();
@@ -693,7 +757,7 @@ describe('proposeGameForSession (límite opcional de propuestas por integrante)'
     ]);
     participantFindUniqueMock.mockResolvedValue({ userId: AUTHOR_ID });
     groupMemberFindUniqueMock.mockResolvedValue({ role: GroupRole.member });
-    gameFindUniqueMock.mockResolvedValue({ id: GAME_ID });
+    gameFindUniqueMock.mockResolvedValue(MOCK_GAME_RECORD);
     sessionProposalFindUniqueMock.mockResolvedValue(null);
     sessionProposalCreateMock.mockRejectedValue(
       new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {

@@ -1,4 +1,5 @@
 import {
+  AlertCircle,
   CalendarDays,
   Check,
   Clock,
@@ -7,12 +8,15 @@ import {
   Flame,
   Ghost,
   History,
+  Loader2,
   Plus,
+  RefreshCw,
   Trophy,
   Users,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { ApiError } from "../api/client";
 import { mapUserSummary } from "../api/mappers";
 import { GuestLockedView } from "../components/auth/GuestLockedView";
 import { OwnerAvatarStack } from "../components/ui/OwnerAvatarStack";
@@ -24,20 +28,40 @@ import type { Game } from "../types/domain";
 import { formatShortDate } from "../utils/formatDate";
 
 export function HistoryPage() {
-  const { isAuthenticated, loading: authLoading } = useAuth();
+  const { isAuthenticated, backendUser, loading: authLoading } = useAuth();
   const {
     isBootstrapping,
+    isPlayLogsLoading,
+    playLogsError,
+    isGroupStatsLoading,
+    groupStatsError,
     activeGroup,
     activeGroupStats,
     playLogs,
     sessions,
+    ensurePlayLogsLoaded,
+    ensureGroupStatsLoaded,
     openLogPlayModal,
     proposeGame,
   } = useAppState();
 
+  useEffect(() => {
+    if (!isAuthenticated || !backendUser) return;
+    void ensurePlayLogsLoaded();
+  }, [isAuthenticated, backendUser, ensurePlayLogsLoaded]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !backendUser) return;
+    void ensureGroupStatsLoaded(activeGroup?.id ?? null);
+  }, [isAuthenticated, backendUser, activeGroup?.id, ensureGroupStatsLoaded]);
+
   const [proposedFeedbackId, setProposedFeedbackId] = useState<string | null>(
     null,
   );
+  const [proposingShameGameId, setProposingShameGameId] = useState<
+    string | null
+  >(null);
+  const [shameActionError, setShameActionError] = useState<string | null>(null);
 
   const visiblePlayLogs = useMemo(
     () =>
@@ -63,7 +87,9 @@ export function HistoryPage() {
       ) / 10;
 
   const handleProposeShameGame = async (gameId: string, gameName: string) => {
-    if (!activeVotingSession) return;
+    if (!activeVotingSession || proposingShameGameId) return;
+    setProposingShameGameId(gameId);
+    setShameActionError(null);
     const minimalGame: Game = {
       id: gameId,
       bggId: 0,
@@ -88,8 +114,14 @@ export function HistoryPage() {
       );
       setProposedFeedbackId(gameId);
       setTimeout(() => setProposedFeedbackId(null), 2500);
-    } catch {
-      // Ignore duplicate
+    } catch (err) {
+      setShameActionError(
+        err instanceof ApiError
+          ? err.message
+          : "No se pudo proponer el juego en la juntada.",
+      );
+    } finally {
+      setProposingShameGameId(null);
     }
   };
 
@@ -138,12 +170,76 @@ export function HistoryPage() {
         </button>
       </header>
 
-      {isBootstrapping ? (
+      {isBootstrapping || (isPlayLogsLoading && playLogs.length === 0) ? (
         <PageLoadingSkeleton variant="history" />
       ) : (
         <>
+          {shameActionError && (
+            <div
+              role="alert"
+              className="flex items-center gap-2 rounded-2xl border border-terracotta-200 bg-terracotta-50 px-4 py-3 text-xs font-semibold text-terracotta-700"
+            >
+              <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>{shameActionError}</span>
+            </div>
+          )}
+
           {/* Mini-Dashboard (when active group exists) */}
-          {activeGroup && activeGroupStats ? (
+          {!activeGroup ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface p-5">
+              <div className="flex items-center gap-3">
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-forest-50 text-forest-700">
+                  <Users className="h-5 w-5" aria-hidden="true" />
+                </span>
+                <div>
+                  <p className="text-sm font-bold text-ink">
+                    Creá o unite a un grupo para ver estadísticas grupales
+                  </p>
+                  <p className="text-xs text-ink-muted">
+                    Tabla de victorias, juegos más jugados y pila de la
+                    vergüenza del grupo.
+                  </p>
+                </div>
+              </div>
+              <Link
+                to="/groups"
+                className="inline-flex min-h-10 items-center rounded-xl bg-forest-600 px-4 text-xs font-bold text-white hover:bg-forest-700"
+              >
+                Ir a Mis Grupos
+              </Link>
+            </div>
+          ) : groupStatsError && !activeGroupStats ? (
+            <div
+              role="alert"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-terracotta-200 bg-terracotta-50 px-4 py-3.5 text-xs font-semibold text-terracotta-700"
+            >
+              <span className="inline-flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                {groupStatsError}
+              </span>
+              <button
+                type="button"
+                onClick={() => void ensureGroupStatsLoaded(activeGroup.id, true)}
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-lg bg-terracotta-500 px-3 text-xs font-bold text-white hover:bg-terracotta-600 transition"
+              >
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                Reintentar
+              </button>
+            </div>
+          ) : isGroupStatsLoading || !activeGroupStats ? (
+            <div className="grid gap-4 lg:grid-cols-3" aria-busy="true">
+              {[0, 1, 2].map((idx) => (
+                <div
+                  key={idx}
+                  className="h-52 rounded-2xl border border-border bg-surface p-5 animate-pulse space-y-3"
+                >
+                  <div className="h-4 w-28 rounded bg-canvas-subtle" />
+                  <div className="h-8 w-full rounded bg-canvas-subtle" />
+                  <div className="h-8 w-5/6 rounded bg-canvas-subtle" />
+                </div>
+              ))}
+            </div>
+          ) : (
             <section className="grid gap-4 lg:grid-cols-3">
               {/* Card 1: Most Played */}
               <div className="rounded-2xl border border-border bg-surface p-5 shadow-[var(--shadow-card)] flex flex-col justify-between gap-4">
@@ -263,7 +359,9 @@ export function HistoryPage() {
                     Pila de la vergüenza
                   </h2>
                   <span className="rounded-full bg-terracotta-50 px-2.5 py-0.5 text-[11px] font-bold text-terracotta-700 num-tabular">
-                    {activeGroupStats.shelfOfShame.length} sin estrenar
+                    {activeGroupStats.shelfOfShameTotalCount ??
+                      activeGroupStats.shelfOfShame.length}{" "}
+                    sin estrenar
                   </span>
                 </div>
 
@@ -304,20 +402,31 @@ export function HistoryPage() {
                           {activeVotingSession && (
                             <button
                               type="button"
-                              disabled={alreadyProposed}
+                              disabled={
+                                alreadyProposed ||
+                                proposingShameGameId === entry.game.id
+                              }
                               onClick={() =>
                                 void handleProposeShameGame(
                                   entry.game.id,
                                   entry.game.name,
                                 )
                               }
-                              className={`shrink-0 inline-flex min-h-8 items-center gap-1 rounded-lg px-2.5 text-[11px] font-bold transition ${
+                              className={`shrink-0 inline-flex min-h-8 items-center gap-1 rounded-lg px-2.5 text-[11px] font-bold transition disabled:opacity-65 ${
                                 alreadyProposed || justProposed
                                   ? "bg-forest-50 text-forest-700 border border-forest-200"
                                   : "bg-forest-600 text-white hover:bg-forest-700"
                               }`}
                             >
-                              {alreadyProposed || justProposed ? (
+                              {proposingShameGameId === entry.game.id ? (
+                                <>
+                                  <Loader2
+                                    className="h-3 w-3 animate-spin"
+                                    aria-hidden="true"
+                                  />
+                                  Proponiendo
+                                </>
+                              ) : alreadyProposed || justProposed ? (
                                 <>
                                   <Check
                                     className="h-3 w-3"
@@ -343,28 +452,25 @@ export function HistoryPage() {
                 )}
               </div>
             </section>
-          ) : (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface p-5">
-              <div className="flex items-center gap-3">
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-forest-50 text-forest-700">
-                  <Users className="h-5 w-5" aria-hidden="true" />
-                </span>
-                <div>
-                  <p className="text-sm font-bold text-ink">
-                    Creá o unite a un grupo para ver estadísticas grupales
-                  </p>
-                  <p className="text-xs text-ink-muted">
-                    Tabla de victorias, juegos más jugados y pila de la
-                    vergüenza del grupo.
-                  </p>
-                </div>
-              </div>
-              <Link
-                to="/groups"
-                className="inline-flex min-h-10 items-center rounded-xl bg-forest-600 px-4 text-xs font-bold text-white hover:bg-forest-700"
+          )}
+
+          {playLogsError && visiblePlayLogs.length === 0 && (
+            <div
+              role="alert"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-terracotta-200 bg-terracotta-50 px-4 py-3.5 text-xs font-semibold text-terracotta-700"
+            >
+              <span className="inline-flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                {playLogsError}
+              </span>
+              <button
+                type="button"
+                onClick={() => void ensurePlayLogsLoaded(true)}
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-lg bg-terracotta-500 px-3 text-xs font-bold text-white hover:bg-terracotta-600 transition"
               >
-                Ir a Mis Grupos
-              </Link>
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                Reintentar
+              </button>
             </div>
           )}
 
@@ -486,7 +592,7 @@ export function HistoryPage() {
               })}
             </div>
 
-            {visiblePlayLogs.length === 0 && (
+            {!playLogsError && !isPlayLogsLoading && visiblePlayLogs.length === 0 && (
               <div className="rounded-2xl border border-dashed border-border-strong bg-surface/70 p-10 text-center space-y-2">
                 <Dices
                   className="mx-auto h-8 w-8 text-ink-subtle"
