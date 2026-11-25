@@ -1,4 +1,5 @@
 import {
+  Activity,
   CalendarDays,
   CheckCircle2,
   CloudOff,
@@ -45,7 +46,7 @@ export function AppShell({ children }: AppShellProps) {
     isBootstrapping,
     groups,
     activeGroup,
-    library,
+    libraryCount,
     sessions,
     playLogs,
     openLogPlayModal,
@@ -88,7 +89,7 @@ export function AppShell({ children }: AppShellProps) {
   ).length;
 
   const activeGroupPlayCount = activeGroup
-    ? playLogs.filter((l) => l.groupId === activeGroup.id).length
+    ? activeGroup.playLogsCount
     : playLogs.length;
 
   const desktopNavItems = [
@@ -108,7 +109,7 @@ export function AppShell({ children }: AppShellProps) {
       shortLabel: "Ludoteca",
       icon: Library,
       badge:
-        isAuthenticated && !hideNavBadges ? String(library.length) : undefined,
+        isAuthenticated && !hideNavBadges ? String(libraryCount) : undefined,
       badgeTone: "neutral" as const,
       locked: !isAuthenticated,
     },
@@ -338,14 +339,32 @@ export function AppShell({ children }: AppShellProps) {
                   </button>
                 )}
 
-                <button
-                  type="button"
-                  onClick={() => void handleSignOut()}
-                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-bold text-ink-muted hover:bg-canvas-subtle hover:text-terracotta-600 transition shrink-0"
-                >
-                  <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>Salir</span>
-                </button>
+                <div className="flex items-center gap-1 shrink-0">
+                  {backendUser?.isAdmin && (
+                    <NavLink
+                      to="/status"
+                      title="Monitor de estado del backend"
+                      className={({ isActive }) =>
+                        `inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-bold transition ${
+                          isActive
+                            ? "bg-forest-50 text-forest-700"
+                            : "text-ink-muted hover:bg-canvas-subtle hover:text-forest-700"
+                        }`
+                      }
+                    >
+                      <Activity className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Monitor</span>
+                    </NavLink>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void handleSignOut()}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-bold text-ink-muted hover:bg-canvas-subtle hover:text-terracotta-600 transition"
+                  >
+                    <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Salir</span>
+                  </button>
+                </div>
               </div>
             </div>
           ) : (
@@ -417,6 +436,22 @@ export function AppShell({ children }: AppShellProps) {
         <div className="flex items-center gap-2 shrink-0">
           {isAuthenticated ? (
             <>
+              {backendUser?.isAdmin && (
+                <NavLink
+                  to="/status"
+                  aria-label="Monitor del backend"
+                  title="Monitor del backend"
+                  className={({ isActive }) =>
+                    `inline-flex h-8 w-8 items-center justify-center rounded-full border transition ${
+                      isActive
+                        ? "border-forest-600 bg-forest-50 text-forest-700"
+                        : "border-border bg-surface text-ink-muted hover:text-forest-700"
+                    }`
+                  }
+                >
+                  <Activity className="h-3.5 w-3.5" aria-hidden="true" />
+                </NavLink>
+              )}
               {currentUser.avatarUrl ? (
                 <img
                   src={currentUser.avatarUrl}

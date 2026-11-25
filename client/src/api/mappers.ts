@@ -170,6 +170,22 @@ export interface ApiSessionListItem {
   }[];
 }
 
+export interface ApiSessionProposal {
+  id: string;
+  note: string | null;
+  status: ProposalStatus;
+  acceptedAt: string | null;
+  acceptedBy: ApiUserSummary | null;
+  createdAt: string;
+  game: ApiGame;
+  proposedBy: ApiUserSummary;
+  owners: ApiUserSummary[];
+  voteCount: number;
+  score: number;
+  userVoted: boolean;
+  userRank: number | null;
+}
+
 export interface ApiSessionDetail {
   id: string;
   groupId: string | null;
@@ -198,21 +214,63 @@ export interface ApiSessionDetail {
     respondedAt: string;
     user: ApiUserSummary;
   }[];
-  proposals: {
+  proposals: ApiSessionProposal[];
+}
+
+export interface ApiSessionMetadataPatch {
+  id: string;
+  title: string;
+  scheduledAt: string;
+  location: string | null;
+  status: SessionStatus;
+  maxProposalsPerUser: number | null;
+  userProposalsCount?: number;
+  proposalsRemaining: number | null;
+}
+
+export interface ApiSessionRsvpDelta {
+  sessionId: string;
+  participant: {
+    rsvp: RsvpStatus;
+    respondedAt: string;
+    user: ApiUserSummary;
+  };
+  confirmedCount: number;
+  proposalOwners: Record<string, ApiUserSummary[]>;
+}
+
+export interface ApiProposeGameDelta {
+  proposal: ApiSessionProposal;
+  quota: {
+    maxProposalsPerUser: number | null;
+    userProposalsCount?: number;
+    proposalsRemaining: number | null;
+  };
+  addedParticipant?: {
+    rsvp: RsvpStatus;
+    user: ApiUserSummary;
+  };
+}
+
+export interface ApiProposalStatusDelta {
+  proposalPatch: {
     id: string;
-    note: string | null;
     status: ProposalStatus;
     acceptedAt: string | null;
     acceptedBy: ApiUserSummary | null;
-    createdAt: string;
-    game: ApiGame;
-    proposedBy: ApiUserSummary;
-    owners: ApiUserSummary[];
-    voteCount: number;
-    score: number;
-    userVoted: boolean;
-    userRank: number | null;
-  }[];
+  };
+  votes: ApiSessionVotesSnapshot;
+}
+
+export interface ApiDeleteProposalDelta {
+  removedProposalId: string;
+  refundedVotesCount: number;
+  quota: {
+    maxProposalsPerUser: number | null;
+    userProposalsCount: number;
+    proposalsRemaining: number | null;
+  };
+  votes: ApiSessionVotesSnapshot;
 }
 
 export interface ApiProposalVoteSummary {
@@ -287,6 +345,7 @@ export interface ApiGroupStats {
     winsCount: number;
     winRate: number;
   }[];
+  shelfOfShameTotalCount?: number;
   shelfOfShame: {
     game: {
       id: string;
@@ -365,6 +424,7 @@ export function mapLibraryItem(item: ApiLibraryItem): LibraryGameItem {
 export function mapGroup(group: ApiGroup): Group & {
   gamesCount: number;
   sessionsCount: number;
+  playLogsCount: number;
   memberOwnedCounts: Record<string, number>;
 } {
   const memberOwnedCounts: Record<string, number> = {};
@@ -379,6 +439,7 @@ export function mapGroup(group: ApiGroup): Group & {
     createdBy: group.createdBy,
     gamesCount: group.gamesCount,
     sessionsCount: group.sessionsCount,
+    playLogsCount: group.playLogsCount,
     memberOwnedCounts,
     members: group.members.map((m) => ({
       role: m.role,
@@ -388,8 +449,8 @@ export function mapGroup(group: ApiGroup): Group & {
   };
 }
 
-export function mapSessionDetail(detail: ApiSessionDetail): GameSession {
-  const proposals: SessionProposal[] = detail.proposals.map((p) => ({
+export function mapSessionProposal(p: ApiSessionProposal): SessionProposal {
+  return {
     id: p.id,
     game: mapGame(p.game),
     owners: p.owners.map(mapUserSummary),
@@ -402,7 +463,11 @@ export function mapSessionDetail(detail: ApiSessionDetail): GameSession {
     score: p.score,
     userVoted: p.userVoted,
     userRank: p.userRank ?? undefined,
-  }));
+  };
+}
+
+export function mapSessionDetail(detail: ApiSessionDetail): GameSession {
+  const proposals: SessionProposal[] = detail.proposals.map(mapSessionProposal);
 
   return {
     id: detail.id,
@@ -440,12 +505,153 @@ export function mapSessionDetail(detail: ApiSessionDetail): GameSession {
         acceptedGames: item.acceptedGames,
       }),
     ),
+    isDetailLoaded: true,
+    detailLoadedAt: Date.now(),
     participants: detail.participants.map((p) => ({
       rsvp: p.rsvp,
       user: mapUserSummary(p.user),
     })),
     proposals,
   };
+}
+
+export function applySessionMetadataPatch(
+  session: GameSession,
+  patch: ApiSessionMetadataPatch,
+): GameSession {
+  const nextCount =
+    patch.userProposalsCount !== undefined
+      ? patch.userProposalsCount
+      : session.userProposalsCount;
+  const nextRemaining =
+    patch.maxProposalsPerUser !== null && nextCount !== undefined
+      ? Math.max(0, patch.maxProposalsPerUser - nextCount)
+      : patch.proposalsRemaining;
+
+  return {
+    ...session,
+    title: patch.title,
+    scheduledAt: patch.scheduledAt,
+    location: patch.location ?? 'Lugar a confirmar',
+    status: patch.status,
+    maxProposalsPerUser: patch.maxProposalsPerUser,
+    userProposalsCount: nextCount,
+    proposalsRemaining: nextRemaining,
+  };
+}
+
+export function applySessionStatusPatch(
+  session: GameSession,
+  patch: { id: string; status: SessionStatus },
+): GameSession {
+  return {
+    ...session,
+    status: patch.status,
+  };
+}
+
+export function applyRsvpDelta(
+  session: GameSession,
+  delta: ApiSessionRsvpDelta,
+): GameSession {
+  const mappedUser = mapUserSummary(delta.participant.user);
+  const exists = session.participants.some((p) => p.user.id === mappedUser.id);
+  const nextParticipants = exists
+    ? session.participants.map((p) =>
+        p.user.id === mappedUser.id
+          ? { user: mappedUser, rsvp: delta.participant.rsvp }
+          : p,
+      )
+    : [...session.participants, { user: mappedUser, rsvp: delta.participant.rsvp }];
+
+  const nextProposals = session.proposals.map((p) => {
+    const rawOwners = delta.proposalOwners[p.id];
+    if (!rawOwners) return p;
+    return {
+      ...p,
+      owners: rawOwners.map(mapUserSummary),
+    };
+  });
+
+  return {
+    ...session,
+    participants: nextParticipants,
+    proposals: nextProposals,
+  };
+}
+
+export function applyProposalCreatedDelta(
+  session: GameSession,
+  delta: ApiProposeGameDelta,
+): GameSession {
+  const newProposal = mapSessionProposal(delta.proposal);
+  const withoutDup = session.proposals.filter((p) => p.id !== newProposal.id);
+  const nextProposals = [...withoutDup, newProposal];
+
+  let nextParticipants = session.participants;
+  if (delta.addedParticipant) {
+    const addedUser = mapUserSummary(delta.addedParticipant.user);
+    if (!nextParticipants.some((p) => p.user.id === addedUser.id)) {
+      nextParticipants = [
+        ...nextParticipants,
+        { user: addedUser, rsvp: delta.addedParticipant.rsvp },
+      ];
+    }
+  }
+
+  const nextUserProposalsCount =
+    delta.quota.userProposalsCount !== undefined
+      ? delta.quota.userProposalsCount
+      : session.userProposalsCount !== undefined
+        ? session.userProposalsCount + 1
+        : undefined;
+
+  return {
+    ...session,
+    maxProposalsPerUser: delta.quota.maxProposalsPerUser,
+    userProposalsCount: nextUserProposalsCount,
+    proposalsRemaining: delta.quota.proposalsRemaining,
+    participants: nextParticipants,
+    proposals: nextProposals,
+  };
+}
+
+export function applyProposalStatusDelta(
+  session: GameSession,
+  delta: ApiProposalStatusDelta,
+): GameSession {
+  const patchedSession: GameSession = {
+    ...session,
+    proposals: session.proposals.map((p) =>
+      p.id === delta.proposalPatch.id
+        ? {
+            ...p,
+            status: delta.proposalPatch.status,
+            acceptedAt: delta.proposalPatch.acceptedAt ?? undefined,
+            acceptedBy: delta.proposalPatch.acceptedBy
+              ? mapUserSummary(delta.proposalPatch.acceptedBy)
+              : undefined,
+          }
+        : p,
+    ),
+  };
+
+  return applyVotesSnapshot(patchedSession, delta.votes);
+}
+
+export function applyProposalDeletedDelta(
+  session: GameSession,
+  delta: ApiDeleteProposalDelta,
+): GameSession {
+  const withoutRemoved: GameSession = {
+    ...session,
+    maxProposalsPerUser: delta.quota.maxProposalsPerUser,
+    userProposalsCount: delta.quota.userProposalsCount,
+    proposalsRemaining: delta.quota.proposalsRemaining,
+    proposals: session.proposals.filter((p) => p.id !== delta.removedProposalId),
+  };
+
+  return applyVotesSnapshot(withoutRemoved, delta.votes);
 }
 
 function getPointsForVote(votingMode: VotingMode, rank: number): number {
@@ -687,6 +893,7 @@ export function mapSessionListItem(item: ApiSessionListItem): GameSession {
           isActive: item.series.isActive,
         } satisfies SessionSeriesSummary)
       : null,
+    isDetailLoaded: false,
     participants: item.participants.map((p) => ({
       rsvp: p.rsvp,
       user: mapUserSummary(p.user),

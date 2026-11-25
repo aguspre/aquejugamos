@@ -1,4 +1,9 @@
 import { firebaseAuth } from '../lib/firebase';
+import {
+  generateClientRequestId,
+  parseServerTimingHeader,
+  recordClientApiCall,
+} from './telemetry';
 
 const TOKEN_STORAGE_KEY = 'aquejugamos_token';
 
@@ -104,15 +109,23 @@ export async function apiRequest<T>(
     }
   }
 
+  const startedAt = performance.now();
+  const method = (rest.method ?? 'GET').toUpperCase();
+  const requestId = generateClientRequestId();
+
   const headers: Record<string, string> = {
     Accept: 'application/json',
+    'x-request-id': requestId,
     ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     ...(customHeaders as Record<string, string> | undefined),
   };
 
   let token: string | null = authToken ?? null;
+  let tokenAcquireMs = 0;
   if (!token && firebaseAuth.currentUser) {
+    const tokenStart = performance.now();
     token = await firebaseAuth.currentUser.getIdToken();
+    tokenAcquireMs = Math.round((performance.now() - tokenStart) * 100) / 100;
   } else if (!token) {
     token = getStoredGuestToken();
   }
@@ -149,6 +162,31 @@ export async function apiRequest<T>(
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch (error) {
+    const clientTotalMs = Math.round((performance.now() - startedAt) * 100) / 100;
+    const errorCode = timedOut
+      ? 'REQUEST_TIMEOUT'
+      : error instanceof DOMException && error.name === 'AbortError'
+        ? 'REQUEST_ABORTED'
+        : 'NETWORK_ERROR';
+
+    if (errorCode !== 'REQUEST_ABORTED') {
+      recordClientApiCall({
+        id: requestId,
+        requestId,
+        timestamp: new Date().toISOString(),
+        method,
+        path: `${url.pathname}${url.search}`,
+        status: timedOut ? 408 : 0,
+        ok: false,
+        clientTotalMs,
+        tokenAcquireMs,
+        networkOverheadMs: Math.max(0, Math.round((clientTotalMs - tokenAcquireMs) * 100) / 100),
+        responseBytes: 0,
+        serverTiming: null,
+        errorCode,
+      });
+    }
+
     if (timedOut) {
       throw new ApiError(
         408,
@@ -173,11 +211,41 @@ export async function apiRequest<T>(
     }
   }
 
+  const serverRequestId = response.headers.get('x-request-id') ?? requestId;
+  const serverTiming = parseServerTimingHeader(response.headers.get('server-timing'));
+
   if (response.status === 204) {
+    const clientTotalMs = Math.round((performance.now() - startedAt) * 100) / 100;
+    const serverTotalMs = serverTiming?.serverTotalMs ?? 0;
+    recordClientApiCall({
+      id: serverRequestId,
+      requestId: serverRequestId,
+      timestamp: new Date().toISOString(),
+      method,
+      path: `${url.pathname}${url.search}`,
+      status: 204,
+      ok: true,
+      clientTotalMs,
+      tokenAcquireMs,
+      networkOverheadMs: Math.max(
+        0,
+        Math.round((clientTotalMs - tokenAcquireMs - serverTotalMs) * 100) / 100,
+      ),
+      responseBytes: 0,
+      serverTiming,
+    });
     return undefined as T;
   }
 
   const text = await response.text();
+  const clientTotalMs = Math.round((performance.now() - startedAt) * 100) / 100;
+  const responseBytes = text ? new TextEncoder().encode(text).byteLength : 0;
+  const serverTotalMs = serverTiming?.serverTotalMs ?? 0;
+  const networkOverheadMs = Math.max(
+    0,
+    Math.round((clientTotalMs - tokenAcquireMs - serverTotalMs) * 100) / 100,
+  );
+
   let json: unknown = null;
   if (text) {
     try {
@@ -191,13 +259,46 @@ export async function apiRequest<T>(
     const errPayload = (
       json as { error?: { code?: string; message?: string; details?: unknown } }
     )?.error;
+    const resolvedCode = errPayload?.code ?? `HTTP_${response.status}`;
+
+    recordClientApiCall({
+      id: serverRequestId,
+      requestId: serverRequestId,
+      timestamp: new Date().toISOString(),
+      method,
+      path: `${url.pathname}${url.search}`,
+      status: response.status,
+      ok: false,
+      clientTotalMs,
+      tokenAcquireMs,
+      networkOverheadMs,
+      responseBytes,
+      serverTiming,
+      errorCode: resolvedCode,
+    });
+
     throw new ApiError(
       response.status,
-      errPayload?.code ?? `HTTP_${response.status}`,
+      resolvedCode,
       errPayload?.message ?? getFriendlyHttpFallbackMessage(response.status),
       errPayload?.details,
     );
   }
+
+  recordClientApiCall({
+    id: serverRequestId,
+    requestId: serverRequestId,
+    timestamp: new Date().toISOString(),
+    method,
+    path: `${url.pathname}${url.search}`,
+    status: response.status,
+    ok: true,
+    clientTotalMs,
+    tokenAcquireMs,
+    networkOverheadMs,
+    responseBytes,
+    serverTiming,
+  });
 
   return json as T;
 }

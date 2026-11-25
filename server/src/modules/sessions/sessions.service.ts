@@ -230,6 +230,27 @@ const ACTIVE_SESSION_STATUSES: SessionStatus[] = [
   SessionStatus.locked,
 ];
 
+const SERIES_ROLLOVER_CHECK_TTL_MS = 60_000;
+const seriesRolloverCheckedAt = new Map<string, number>();
+
+function shouldCheckSeriesRollover(cacheKey: string): boolean {
+  if (process.env.NODE_ENV === 'test') return true;
+  const now = Date.now();
+  const expiresAt = seriesRolloverCheckedAt.get(cacheKey);
+  if (expiresAt && expiresAt > now) {
+    return false;
+  }
+  if (seriesRolloverCheckedAt.size > 2000) {
+    seriesRolloverCheckedAt.clear();
+  }
+  seriesRolloverCheckedAt.set(cacheKey, now + SERIES_ROLLOVER_CHECK_TTL_MS);
+  return true;
+}
+
+function invalidateSeriesRolloverCache(): void {
+  seriesRolloverCheckedAt.clear();
+}
+
 interface LockedSeriesRow {
   id: string;
   group_id: string;
@@ -421,27 +442,31 @@ export async function listUserSessions(
     }
 
     // Roll over any active recurring series in the user's groups whose occurrence passed
-    const rolloverCutoff = new Date(Date.now() - SERIES_ROLLOVER_GRACE_MS);
-    const staleSeries = await prisma.sessionSeries.findMany({
-      where: {
-        isActive: true,
-        ...(query.groupId ? { groupId: query.groupId } : {}),
-        group: { members: { some: { userId } } },
-        NOT: {
-          sessions: {
-            some: {
-              status: { in: ACTIVE_SESSION_STATUSES },
-              scheduledAt: { gt: rolloverCutoff },
+    // (throttled per user/group for 60s to avoid extra NOT EXISTS queries on every GET)
+    const rolloverKey = `${userId}:${query.groupId ?? '*'}`;
+    if (shouldCheckSeriesRollover(rolloverKey)) {
+      const rolloverCutoff = new Date(Date.now() - SERIES_ROLLOVER_GRACE_MS);
+      const staleSeries = await prisma.sessionSeries.findMany({
+        where: {
+          isActive: true,
+          ...(query.groupId ? { groupId: query.groupId } : {}),
+          group: { members: { some: { userId } } },
+          NOT: {
+            sessions: {
+              some: {
+                status: { in: ACTIVE_SESSION_STATUSES },
+                scheduledAt: { gt: rolloverCutoff },
+              },
             },
           },
         },
-      },
-      select: { id: true },
-      take: 10,
-    });
+        select: { id: true },
+        take: 10,
+      });
 
-    for (const s of staleSeries) {
-      await ensureActiveSeriesSession(s.id);
+      for (const s of staleSeries) {
+        await ensureActiveSeriesSession(s.id);
+      }
     }
 
     accessOr = [
@@ -452,6 +477,7 @@ export async function listUserSessions(
   }
 
   const sessions = await prisma.session.findMany({
+    relationLoadStrategy: 'join',
     where: {
       ...(query.groupId && !scope?.isGuest ? { groupId: query.groupId } : {}),
       ...(query.status ? { status: query.status } : {}),
@@ -489,6 +515,7 @@ export async function listUserSessions(
       },
     },
     orderBy: { scheduledAt: 'desc' },
+    take: 60,
   });
 
   return sessions.map((session) => {
@@ -631,6 +658,10 @@ export async function createSession(userId: string, input: CreateSessionInput) {
 
     return created.id;
   });
+
+  if (input.recurrenceFrequency && input.groupId) {
+    invalidateSeriesRolloverCache();
+  }
 
   return getSessionDetail(userId, createdSessionId);
 }
@@ -805,6 +836,7 @@ export async function advanceSeriesToNextOccurrence(
     { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
   );
 
+  invalidateSeriesRolloverCache();
   return getSessionDetail(userId, nextSessionId);
 }
 
@@ -855,6 +887,7 @@ export async function updateSessionSeries(
     { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
   );
 
+  invalidateSeriesRolloverCache();
   let activeSessionId: string | null = null;
   if (updatedSeries.isActive) {
     const ensured = await ensureActiveSeriesSession(updatedSeries.id);
@@ -871,10 +904,11 @@ export async function joinSessionByInviteToken(
   userId: string,
   inviteToken: string,
   rsvp: RsvpStatus,
+  scope?: SessionAccessScope,
 ) {
   const session = await prisma.session.findUnique({
     where: { inviteToken },
-    select: { id: true, status: true },
+    select: { id: true, groupId: true, status: true },
   });
 
   if (!session) {
@@ -882,6 +916,18 @@ export async function joinSessionByInviteToken(
       'Link de invitación de juntada inválido o inexistente',
       'SESSION_INVITE_NOT_FOUND',
     );
+  }
+
+  if (scope?.isGuest) {
+    const allowedGuestTarget =
+      (scope.guestSessionId && scope.guestSessionId === session.id) ||
+      (scope.guestGroupId && scope.guestGroupId === session.groupId);
+    if (!allowedGuestTarget) {
+      throw forbidden(
+        'Tu sesión de invitado no corresponde a esta juntada. Ingresá desde el link de invitación o iniciá sesión.',
+        'SESSION_ACCESS_DENIED',
+      );
+    }
   }
 
   if (session.status === SessionStatus.cancelled) {
@@ -903,7 +949,7 @@ export async function joinSessionByInviteToken(
     },
   });
 
-  return getSessionDetail(userId, session.id);
+  return getSessionDetail(userId, session.id, scope);
 }
 
 export async function getSessionDetail(
@@ -912,6 +958,7 @@ export async function getSessionDetail(
   scope?: SessionAccessScope,
 ) {
   const session = await prisma.session.findUnique({
+    relationLoadStrategy: 'join',
     where: { id: sessionId },
     include: {
       group: {
@@ -982,6 +1029,7 @@ export async function getSessionDetail(
   const [ownedRows, siblingOccurrences] = await Promise.all([
     proposalGameIds.length > 0 && allParticipantIds.length > 0
       ? prisma.userGame.findMany({
+          relationLoadStrategy: 'join',
           where: {
             gameId: { in: proposalGameIds },
             userId: { in: allParticipantIds },
@@ -992,6 +1040,7 @@ export async function getSessionDetail(
       : Promise.resolve([]),
     canQuerySeriesHistory && session.seriesId
       ? prisma.session.findMany({
+          relationLoadStrategy: 'join',
           where: canViewAllSeriesHistory
             ? {
                 seriesId: session.seriesId,
@@ -1116,21 +1165,103 @@ export async function getSessionDetail(
   };
 }
 
+export interface SessionRsvpDelta {
+  sessionId: string;
+  participant: {
+    rsvp: RsvpStatus;
+    respondedAt: Date;
+    user: OwnerSummary;
+  };
+  confirmedCount: number;
+  proposalOwners: Record<string, OwnerSummary[]>;
+}
+
 export async function updateParticipantRsvp(
   userId: string,
   sessionId: string,
   rsvp: RsvpStatus,
   scope?: SessionAccessScope,
-) {
+): Promise<SessionRsvpDelta> {
   await assertSessionAccess(userId, sessionId, scope);
 
-  await prisma.sessionParticipant.upsert({
+  const upserted = await prisma.sessionParticipant.upsert({
+    relationLoadStrategy: 'join',
     where: { sessionId_userId: { sessionId, userId } },
     update: { rsvp, respondedAt: new Date() },
     create: { sessionId, userId, rsvp },
+    select: {
+      rsvp: true,
+      respondedAt: true,
+      user: { select: USER_SUMMARY_SELECT },
+    },
   });
 
-  return getSessionDetail(userId, sessionId, scope);
+  const [participants, proposals] = await Promise.all([
+    prisma.sessionParticipant.findMany({
+      where: { sessionId },
+      select: { userId: true, rsvp: true },
+    }),
+    prisma.sessionProposal.findMany({
+      where: { sessionId },
+      select: { id: true, gameId: true },
+    }),
+  ]);
+
+  const goingIdSet = new Set(
+    participants.filter((p) => p.rsvp === RsvpStatus.going).map((p) => p.userId),
+  );
+  const allParticipantIds = participants.map((p) => p.userId);
+  const proposalGameIds = proposals.map((p) => p.gameId);
+
+  const proposalOwners: Record<string, OwnerSummary[]> = {};
+  if (proposalGameIds.length > 0 && allParticipantIds.length > 0) {
+    const ownedRows = await prisma.userGame.findMany({
+      relationLoadStrategy: 'join',
+      where: {
+        gameId: { in: proposalGameIds },
+        userId: { in: allParticipantIds },
+        status: UserGameStatus.owned,
+      },
+      select: {
+        gameId: true,
+        userId: true,
+        user: { select: USER_SUMMARY_SELECT },
+      },
+    });
+
+    const goingOwnersByGame = new Map<string, OwnerSummary[]>();
+    const fallbackOwnersByGame = new Map<string, OwnerSummary[]>();
+
+    for (const row of ownedRows) {
+      const fb = fallbackOwnersByGame.get(row.gameId) ?? [];
+      fb.push(row.user);
+      fallbackOwnersByGame.set(row.gameId, fb);
+
+      if (goingIdSet.has(row.userId)) {
+        const gl = goingOwnersByGame.get(row.gameId) ?? [];
+        gl.push(row.user);
+        goingOwnersByGame.set(row.gameId, gl);
+      }
+    }
+
+    for (const proposal of proposals) {
+      proposalOwners[proposal.id] =
+        goingOwnersByGame.get(proposal.gameId) ??
+        fallbackOwnersByGame.get(proposal.gameId) ??
+        [];
+    }
+  }
+
+  return {
+    sessionId,
+    participant: {
+      rsvp: upserted.rsvp,
+      respondedAt: upserted.respondedAt,
+      user: upserted.user,
+    },
+    confirmedCount: goingIdSet.size,
+    proposalOwners,
+  };
 }
 
 async function lockAndAssertSessionManager(
@@ -1146,9 +1277,10 @@ async function lockAndAssertSessionManager(
       series_id: string | null;
       host_id: string;
       status: SessionStatus;
+      max_proposals_per_user: number | null;
     }[]
   >`
-    SELECT id, group_id, series_id, host_id, status
+    SELECT id, group_id, series_id, host_id, status, max_proposals_per_user
     FROM sessions
     WHERE id = ${sessionId}::uuid
     FOR UPDATE
@@ -1181,12 +1313,23 @@ async function lockAndAssertSessionManager(
   return lockedSession;
 }
 
+export interface SessionMetadataPatch {
+  id: string;
+  title: string;
+  scheduledAt: Date;
+  location: string | null;
+  status: SessionStatus;
+  maxProposalsPerUser: number | null;
+  userProposalsCount?: number;
+  proposalsRemaining: number | null;
+}
+
 export async function updateSession(
   userId: string,
   sessionId: string,
   input: UpdateSessionInput,
-) {
-  await prisma.$transaction(
+): Promise<SessionMetadataPatch> {
+  return prisma.$transaction(
     async (tx) => {
       const lockedSession = await lockAndAssertSessionManager(
         tx,
@@ -1206,7 +1349,7 @@ export async function updateSession(
         );
       }
 
-      await tx.session.update({
+      const updated = await tx.session.update({
         where: { id: sessionId },
         data: {
           ...(input.title !== undefined ? { title: input.title } : {}),
@@ -1215,6 +1358,14 @@ export async function updateSession(
           ...(input.maxProposalsPerUser !== undefined
             ? { maxProposalsPerUser: input.maxProposalsPerUser }
             : {}),
+        },
+        select: {
+          id: true,
+          title: true,
+          scheduledAt: true,
+          location: true,
+          status: true,
+          maxProposalsPerUser: true,
         },
       });
 
@@ -1236,11 +1387,29 @@ export async function updateSession(
           },
         });
       }
+
+      let userProposalsCount: number | undefined;
+      let proposalsRemaining: number | null = null;
+      if (updated.maxProposalsPerUser !== null) {
+        userProposalsCount = await tx.sessionProposal.count({
+          where: { sessionId, proposedBy: userId },
+        });
+        proposalsRemaining = Math.max(0, updated.maxProposalsPerUser - userProposalsCount);
+      }
+
+      return {
+        id: updated.id,
+        title: updated.title,
+        scheduledAt: updated.scheduledAt,
+        location: updated.location,
+        status: updated.status,
+        maxProposalsPerUser: updated.maxProposalsPerUser,
+        ...(userProposalsCount !== undefined ? { userProposalsCount } : {}),
+        proposalsRemaining,
+      };
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
   );
-
-  return getSessionDetail(userId, sessionId);
 }
 
 export async function deleteSession(userId: string, sessionId: string): Promise<void> {
@@ -1262,11 +1431,16 @@ export async function deleteSession(userId: string, sessionId: string): Promise<
   );
 }
 
+export interface SessionStatusPatch {
+  id: string;
+  status: SessionStatus;
+}
+
 export async function updateSessionStatus(
   userId: string,
   sessionId: string,
   status: SessionStatus,
-) {
+): Promise<SessionStatusPatch> {
   await prisma.$transaction(
     async (tx) => {
       const lockedSession = await lockAndAssertSessionManager(
@@ -1308,7 +1482,7 @@ export async function updateSessionStatus(
     { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
   );
 
-  return getSessionDetail(userId, sessionId);
+  return { id: sessionId, status };
 }
 
 export async function getSessionCombinedPool(
@@ -1381,16 +1555,29 @@ export async function getSessionCombinedPool(
     gameWhere.AND = gameAnd;
   }
 
-  const [ownedRows, existingProposals] = await Promise.all([
-    prisma.userGame.findMany({
+  const [uniqueGames, existingProposals] = await Promise.all([
+    prisma.game.findMany({
+      relationLoadStrategy: 'join',
       where: {
-        userId: { in: goingUserIds },
-        status: UserGameStatus.owned,
-        game: gameWhere,
+        ...gameWhere,
+        userGames: {
+          some: {
+            userId: { in: goingUserIds },
+            status: UserGameStatus.owned,
+          },
+        },
       },
       include: {
-        user: { select: USER_SUMMARY_SELECT },
-        game: { include: GAME_WITH_MECHANICS_INCLUDE },
+        ...GAME_WITH_MECHANICS_INCLUDE,
+        userGames: {
+          where: {
+            userId: { in: goingUserIds },
+            status: UserGameStatus.owned,
+          },
+          select: {
+            user: { select: USER_SUMMARY_SELECT },
+          },
+        },
       },
     }),
     prisma.sessionProposal.findMany({
@@ -1402,11 +1589,18 @@ export async function getSessionCombinedPool(
   const proposalStatusByGameId = new Map(
     existingProposals.map((p) => [p.gameId, p.status]),
   );
+  const ownedRows: { user: OwnerSummary; game: PoolGameInput }[] = [];
+  for (const game of uniqueGames) {
+    const formattedGame = formatGame(game);
+    for (const ug of game.userGames) {
+      ownedRows.push({
+        user: ug.user,
+        game: formattedGame,
+      });
+    }
+  }
   const items = aggregateCombinedPool(
-    ownedRows.map((row) => ({
-      user: row.user,
-      game: formatGame(row.game),
-    })),
+    ownedRows,
     proposalStatusByGameId,
     {
       confirmedCount,
@@ -1424,13 +1618,40 @@ export async function getSessionCombinedPool(
   };
 }
 
+export interface ProposeGameDelta {
+  proposal: {
+    id: string;
+    note: string | null;
+    status: ProposalStatus;
+    acceptedAt: Date | null;
+    acceptedBy: OwnerSummary | null;
+    createdAt: Date;
+    game: PoolGameInput;
+    proposedBy: OwnerSummary;
+    owners: OwnerSummary[];
+    voteCount: number;
+    score: number;
+    userVoted: boolean;
+    userRank: number | null;
+  };
+  quota: {
+    maxProposalsPerUser: number | null;
+    userProposalsCount?: number;
+    proposalsRemaining: number | null;
+  };
+  addedParticipant?: {
+    rsvp: RsvpStatus;
+    user: OwnerSummary;
+  };
+}
+
 export async function proposeGameForSession(
   userId: string,
   sessionId: string,
   input: CreateProposalInput,
   scope?: SessionAccessScope,
-) {
-  await prisma.$transaction(
+): Promise<ProposeGameDelta> {
+  const txResult = await prisma.$transaction(
     async (tx) => {
       // Lock session row (FOR SHARE) so concurrent status changes cannot race with proposing
       const sessionRows = await tx.$queryRaw<
@@ -1468,7 +1689,9 @@ export async function proposeGameForSession(
           : Promise.resolve(null),
       ]);
 
-      const isHost = lockedSession.host_id === userId;
+      const isHost =
+        lockedSession.host_id === userId &&
+        (!lockedSession.group_id || Boolean(membership));
       const isParticipant = Boolean(participant);
       const isGroupMember = Boolean(membership);
       const isInvitedGuest = Boolean(
@@ -1502,8 +1725,9 @@ export async function proposeGameForSession(
 
       const [game, existing, userProposalCount] = await Promise.all([
         tx.game.findUnique({
+          relationLoadStrategy: 'join',
           where: { id: input.gameId },
-          select: { id: true },
+          include: GAME_WITH_MECHANICS_INCLUDE,
         }),
         tx.sessionProposal.findUnique({
           where: {
@@ -1541,23 +1765,37 @@ export async function proposeGameForSession(
         );
       }
 
+      let addedGuestParticipant = false;
       if (scope?.isGuest && !isParticipant) {
         await tx.sessionParticipant.upsert({
           where: { sessionId_userId: { sessionId, userId } },
           update: {},
           create: { sessionId, userId, rsvp: RsvpStatus.going },
         });
+        addedGuestParticipant = true;
       }
 
       try {
-        await tx.sessionProposal.create({
+        const createdProposal = await tx.sessionProposal.create({
           data: {
             sessionId,
             gameId: input.gameId,
             proposedBy: userId,
             note: input.note ?? null,
           },
+          include: {
+            proposer: { select: USER_SUMMARY_SELECT },
+          },
         });
+
+        return {
+          createdProposal,
+          game,
+          maxProposalsPerUser: lockedSession.max_proposals_per_user,
+          nextUserProposalCount:
+            lockedSession.max_proposals_per_user !== null ? userProposalCount + 1 : undefined,
+          addedGuestParticipant,
+        };
       } catch (error) {
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
           throw conflict('Ese juego ya fue propuesto en esta juntada', 'DUPLICATE_PROPOSAL');
@@ -1568,7 +1806,79 @@ export async function proposeGameForSession(
     { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
   );
 
-  return getSessionDetail(userId, sessionId, scope);
+  // Fetch only the owners of the newly proposed game among participants (1 lightweight query)
+  const participantOwners = await prisma.sessionParticipant.findMany({
+    relationLoadStrategy: 'join',
+    where: {
+      sessionId,
+      user: {
+        userGames: {
+          some: {
+            gameId: input.gameId,
+            status: UserGameStatus.owned,
+          },
+        },
+      },
+    },
+    select: {
+      rsvp: true,
+      user: { select: USER_SUMMARY_SELECT },
+    },
+  });
+
+  const goingOwners = participantOwners
+    .filter((p) => p.rsvp === RsvpStatus.going)
+    .map((p) => p.user);
+  const owners = goingOwners.length > 0 ? goingOwners : participantOwners.map((p) => p.user);
+
+  const { createdProposal, game, maxProposalsPerUser, nextUserProposalCount, addedGuestParticipant } =
+    txResult;
+
+  return {
+    proposal: {
+      id: createdProposal.id,
+      note: createdProposal.note,
+      status: createdProposal.status ?? ProposalStatus.open,
+      acceptedAt: createdProposal.acceptedAt ?? null,
+      acceptedBy: null,
+      createdAt: createdProposal.createdAt ?? new Date(),
+      game: formatGame(game),
+      proposedBy: createdProposal.proposer,
+      owners,
+      voteCount: 0,
+      score: 0,
+      userVoted: false,
+      userRank: null,
+    },
+    quota: {
+      maxProposalsPerUser,
+      ...(nextUserProposalCount !== undefined
+        ? { userProposalsCount: nextUserProposalCount }
+        : {}),
+      proposalsRemaining:
+        maxProposalsPerUser !== null && nextUserProposalCount !== undefined
+          ? Math.max(0, maxProposalsPerUser - nextUserProposalCount)
+          : null,
+    },
+    ...(addedGuestParticipant
+      ? {
+          addedParticipant: {
+            rsvp: RsvpStatus.going,
+            user: createdProposal.proposer,
+          },
+        }
+      : {}),
+  };
+}
+
+export interface ProposalStatusDelta {
+  proposalPatch: {
+    id: string;
+    status: ProposalStatus;
+    acceptedAt: Date | null;
+    acceptedBy: OwnerSummary | null;
+  };
+  votes: SessionVotesSnapshot;
 }
 
 export async function updateProposalStatus(
@@ -1576,7 +1886,7 @@ export async function updateProposalStatus(
   sessionId: string,
   proposalId: string,
   status: ProposalStatus,
-) {
+): Promise<ProposalStatusDelta> {
   const { session, isHost, isGroupAdmin } = await assertSessionAccess(userId, sessionId);
   if (!isHost && !isGroupAdmin) {
     throw forbidden(
@@ -1605,7 +1915,8 @@ export async function updateProposalStatus(
     throw notFound('Propuesta no encontrada en esta juntada', 'PROPOSAL_NOT_FOUND');
   }
 
-  await prisma.sessionProposal.update({
+  const updated = await prisma.sessionProposal.update({
+    relationLoadStrategy: 'join',
     where: { id: proposal.id },
     data:
       status === ProposalStatus.accepted
@@ -1619,14 +1930,52 @@ export async function updateProposalStatus(
             acceptedAt: null,
             acceptedBy: null,
           },
+    select: {
+      id: true,
+      status: true,
+      acceptedAt: true,
+      accepter: { select: USER_SUMMARY_SELECT },
+    },
   });
 
-  return getSessionDetail(userId, sessionId);
+  const proposals = await prisma.sessionProposal.findMany({
+    relationLoadStrategy: 'join',
+    where: { sessionId },
+    select: {
+      id: true,
+      status: true,
+      acceptedAt: true,
+      createdAt: true,
+      votes: { select: { userId: true, rank: true } },
+    },
+  });
+
+  return {
+    proposalPatch: {
+      id: updated.id,
+      status: updated.status,
+      acceptedAt: updated.acceptedAt,
+      acceptedBy: updated.accepter,
+    },
+    votes: buildVotesSnapshot(
+      sessionId,
+      session.votingMode,
+      session.maxVotesPerUser,
+      userId,
+      proposals,
+    ),
+  };
 }
 
 export interface DeleteSessionProposalResult {
-  session: Awaited<ReturnType<typeof getSessionDetail>>;
+  removedProposalId: string;
   refundedVotesCount: number;
+  quota: {
+    maxProposalsPerUser: number | null;
+    userProposalsCount: number;
+    proposalsRemaining: number | null;
+  };
+  votes: SessionVotesSnapshot;
 }
 
 export async function deleteSessionProposal(
@@ -1635,13 +1984,21 @@ export async function deleteSessionProposal(
   proposalId: string,
   scope?: SessionAccessScope,
 ): Promise<DeleteSessionProposalResult> {
-  const refundedVotesCount = await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     // Lock the session row (FOR SHARE) so concurrent status changes (e.g. locking/cancelling)
     // cannot race with proposal deletion.
     const sessionRows = await tx.$queryRaw<
-      { id: string; group_id: string | null; host_id: string; status: SessionStatus }[]
+      {
+        id: string;
+        group_id: string | null;
+        host_id: string;
+        status: SessionStatus;
+        voting_mode: VotingMode;
+        max_votes_per_user: number;
+        max_proposals_per_user: number | null;
+      }[]
     >`
-      SELECT id, group_id, host_id, status
+      SELECT id, group_id, host_id, status, voting_mode, max_votes_per_user, max_proposals_per_user
       FROM sessions
       WHERE id = ${sessionId}::uuid
       FOR SHARE
@@ -1667,7 +2024,9 @@ export async function deleteSessionProposal(
         : Promise.resolve(null),
     ]);
 
-    const isHost = lockedSession.host_id === userId;
+    const isHost =
+      lockedSession.host_id === userId &&
+      (!lockedSession.group_id || Boolean(membership));
     const isParticipant = Boolean(participant);
     const isGroupMember = Boolean(membership);
     const isInvitedGuest = Boolean(
@@ -1733,11 +2092,41 @@ export async function deleteSessionProposal(
       where: { id: proposal.id },
     });
 
-    return deletedVotes.count;
-  });
+    const remainingProposals = await tx.sessionProposal.findMany({
+      relationLoadStrategy: 'join',
+      where: { sessionId },
+      select: {
+        id: true,
+        proposedBy: true,
+        status: true,
+        acceptedAt: true,
+        createdAt: true,
+        votes: { select: { userId: true, rank: true } },
+      },
+    });
 
-  const detail = await getSessionDetail(userId, sessionId, scope);
-  return { session: detail, refundedVotesCount };
+    const maxProposals = lockedSession.max_proposals_per_user ?? null;
+    const quota = computeUserProposalQuota(
+      remainingProposals.map((p) => ({ proposedById: p.proposedBy })),
+      userId,
+      maxProposals,
+    );
+
+    const votes = buildVotesSnapshot(
+      sessionId,
+      lockedSession.voting_mode ?? VotingMode.multi_vote,
+      lockedSession.max_votes_per_user ?? 3,
+      userId,
+      remainingProposals,
+    );
+
+    return {
+      removedProposalId: proposal.id,
+      refundedVotesCount: deletedVotes.count,
+      quota,
+      votes,
+    };
+  });
 }
 
 export async function castVote(
@@ -1750,6 +2139,7 @@ export async function castVote(
   const [{ session, isParticipant }, proposals] = await Promise.all([
     assertSessionAccess(userId, sessionId, scope),
     prisma.sessionProposal.findMany({
+      relationLoadStrategy: 'join',
       where: { sessionId },
       select: {
         id: true,
@@ -2034,6 +2424,7 @@ export async function removeVote(
   const [{ session }, proposals] = await Promise.all([
     assertSessionAccess(userId, sessionId, scope),
     prisma.sessionProposal.findMany({
+      relationLoadStrategy: 'join',
       where: { sessionId },
       select: {
         id: true,

@@ -4,6 +4,7 @@ import type { DecodedIdToken } from 'firebase-admin/auth';
 import { OAuth2Client } from 'google-auth-library';
 import { getEnv } from '../../config/env.js';
 import { prisma } from '../../config/prisma.js';
+import { isUserAdminEmail } from '../../middleware/auth.js';
 import { badRequest, conflict, notFound, unauthorized } from '../../utils/errors.js';
 import { hashPassword, verifyPassword } from '../../utils/password.js';
 import { ensureActiveSeriesSession } from '../sessions/sessions.service.js';
@@ -24,9 +25,14 @@ export interface PublicUser {
   bggUsername: string | null;
   lastBggSyncAt: Date | null;
   createdAt: Date;
+  isAdmin?: boolean;
 }
 
-export function toPublicUser(user: User): PublicUser {
+export function toPublicUser(
+  user: User,
+  options?: { emailVerified?: boolean },
+): PublicUser {
+  const verified = options?.emailVerified ?? false;
   return {
     id: user.id,
     email: user.email,
@@ -36,6 +42,7 @@ export function toPublicUser(user: User): PublicUser {
     bggUsername: user.bggUsername,
     lastBggSyncAt: user.lastBggSyncAt,
     createdAt: user.createdAt,
+    isAdmin: isUserAdminEmail(user.email, verified),
   };
 }
 
@@ -48,6 +55,7 @@ interface CachedFirebaseUser {
 }
 
 const firebaseUserCache = new Map<string, CachedFirebaseUser>();
+const inFlightFirebaseUserSyncs = new Map<string, Promise<User>>();
 
 function setCachedFirebaseUser(user: User): User {
   if (!user.firebaseUid) return user;
@@ -87,79 +95,115 @@ export async function syncFirebaseUser(decoded: DecodedIdToken): Promise<User> {
     firebaseUserCache.delete(decoded.uid);
   }
 
-  const existingByUid = await prisma.user.findUnique({
-    where: { firebaseUid: decoded.uid },
-  });
+  const existingInFlight = inFlightFirebaseUserSyncs.get(decoded.uid);
+  if (existingInFlight) {
+    return existingInFlight;
+  }
 
-  if (existingByUid) {
-    if (!existingByUid.avatarUrl && picture) {
+  const syncPromise = (async () => {
+    const existingByUid = await prisma.user.findUnique({
+      where: { firebaseUid: decoded.uid },
+    });
+
+    if (existingByUid) {
+      if (!existingByUid.avatarUrl && picture) {
+        const updated = await prisma.user.update({
+          where: { id: existingByUid.id },
+          data: { avatarUrl: picture },
+        });
+        return setCachedFirebaseUser(updated);
+      }
+      return setCachedFirebaseUser(existingByUid);
+    }
+
+    const rawEmail = decoded.email?.trim().toLowerCase();
+    if (!rawEmail) {
+      throw unauthorized(
+        'El token de Firebase no incluye un email válido',
+        'INVALID_FIREBASE_TOKEN',
+      );
+    }
+
+    const displayName =
+      (typeof decoded.name === 'string' && decoded.name.trim()) ||
+      rawEmail.split('@')[0] ||
+      'Jugador';
+
+    const existingByEmail = await prisma.user.findUnique({
+      where: { email: rawEmail },
+    });
+
+    if (existingByEmail) {
+      if (!decoded.email_verified) {
+        throw unauthorized(
+          'Debés verificar tu dirección de email antes de vincular esta cuenta',
+          'EMAIL_NOT_VERIFIED',
+        );
+      }
+      if (existingByEmail.firebaseUid && existingByEmail.firebaseUid !== decoded.uid) {
+        throw conflict(
+          'El email ya está vinculado a otra cuenta de autenticación',
+          'EMAIL_ALREADY_LINKED',
+        );
+      }
       const updated = await prisma.user.update({
-        where: { id: existingByUid.id },
-        data: { avatarUrl: picture },
+        where: { id: existingByEmail.id },
+        data: {
+          firebaseUid: decoded.uid,
+          avatarUrl: existingByEmail.avatarUrl ?? picture,
+        },
       });
       return setCachedFirebaseUser(updated);
     }
-    return setCachedFirebaseUser(existingByUid);
-  }
 
-  const rawEmail = decoded.email?.trim().toLowerCase();
-  if (!rawEmail) {
-    throw unauthorized(
-      'El token de Firebase no incluye un email válido',
-      'INVALID_FIREBASE_TOKEN',
-    );
-  }
+    try {
+      const created = await prisma.user.create({
+        data: {
+          email: rawEmail,
+          firebaseUid: decoded.uid,
+          displayName,
+          avatarUrl: picture,
+        },
+      });
+      return setCachedFirebaseUser(created);
+    } catch (error) {
+      // Manejo seguro de race condition cuando llegan requests concurrentes en el primer login
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const recovered =
+          (await prisma.user.findUnique({ where: { firebaseUid: decoded.uid } })) ??
+          (await prisma.user.findUnique({ where: { email: rawEmail } }));
 
-  const displayName =
-    (typeof decoded.name === 'string' && decoded.name.trim()) ||
-    rawEmail.split('@')[0] ||
-    'Jugador';
-
-  const existingByEmail = await prisma.user.findUnique({
-    where: { email: rawEmail },
+        if (recovered) {
+          if (!recovered.firebaseUid) {
+            if (!decoded.email_verified) {
+              throw unauthorized(
+                'Debés verificar tu dirección de email antes de vincular esta cuenta',
+                'EMAIL_NOT_VERIFIED',
+              );
+            }
+            const linked = await prisma.user.update({
+              where: { id: recovered.id },
+              data: { firebaseUid: decoded.uid },
+            });
+            return setCachedFirebaseUser(linked);
+          }
+          if (recovered.firebaseUid !== decoded.uid) {
+            throw conflict(
+              'El email ya está vinculado a otra cuenta de autenticación',
+              'EMAIL_ALREADY_LINKED',
+            );
+          }
+          return setCachedFirebaseUser(recovered);
+        }
+      }
+      throw error;
+    }
+  })().finally(() => {
+    inFlightFirebaseUserSyncs.delete(decoded.uid);
   });
 
-  if (existingByEmail) {
-    const updated = await prisma.user.update({
-      where: { id: existingByEmail.id },
-      data: {
-        firebaseUid: decoded.uid,
-        avatarUrl: existingByEmail.avatarUrl ?? picture,
-      },
-    });
-    return setCachedFirebaseUser(updated);
-  }
-
-  try {
-    const created = await prisma.user.create({
-      data: {
-        email: rawEmail,
-        firebaseUid: decoded.uid,
-        displayName,
-        avatarUrl: picture,
-      },
-    });
-    return setCachedFirebaseUser(created);
-  } catch (error) {
-    // Manejo seguro de race condition cuando llegan requests concurrentes en el primer login
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-      const recovered =
-        (await prisma.user.findUnique({ where: { firebaseUid: decoded.uid } })) ??
-        (await prisma.user.findUnique({ where: { email: rawEmail } }));
-
-      if (recovered) {
-        if (!recovered.firebaseUid) {
-          const linked = await prisma.user.update({
-            where: { id: recovered.id },
-            data: { firebaseUid: decoded.uid },
-          });
-          return setCachedFirebaseUser(linked);
-        }
-        return setCachedFirebaseUser(recovered);
-      }
-    }
-    throw error;
-  }
+  inFlightFirebaseUserSyncs.set(decoded.uid, syncPromise);
+  return syncPromise;
 }
 
 export async function registerUser(input: RegisterInput): Promise<PublicUser> {
@@ -239,6 +283,7 @@ export async function authenticateWithGoogle(idToken: string): Promise<PublicUse
     throw unauthorized('El token de Google no contiene email válido', 'INVALID_GOOGLE_TOKEN');
   }
 
+  const emailVerified = Boolean(payload.email_verified);
   const normalizedEmail = payload.email.toLowerCase();
   const displayName = payload.name?.trim() || normalizedEmail.split('@')[0] || 'Jugador';
   const avatarUrl = payload.picture ?? null;
@@ -254,7 +299,7 @@ export async function authenticateWithGoogle(idToken: string): Promise<PublicUse
         avatarUrl: existingByGoogle.avatarUrl ?? avatarUrl,
       },
     });
-    return toPublicUser(updated);
+    return toPublicUser(updated, { emailVerified });
   }
 
   const existingByEmail = await prisma.user.findUnique({
@@ -262,6 +307,12 @@ export async function authenticateWithGoogle(idToken: string): Promise<PublicUse
   });
 
   if (existingByEmail) {
+    if (!emailVerified) {
+      throw unauthorized(
+        'Debés verificar tu dirección de email antes de vincular esta cuenta',
+        'EMAIL_NOT_VERIFIED',
+      );
+    }
     const linked = await prisma.user.update({
       where: { id: existingByEmail.id },
       data: {
@@ -269,7 +320,7 @@ export async function authenticateWithGoogle(idToken: string): Promise<PublicUse
         avatarUrl: existingByEmail.avatarUrl ?? avatarUrl,
       },
     });
-    return toPublicUser(linked);
+    return toPublicUser(linked, { emailVerified });
   }
 
   const created = await prisma.user.create({
@@ -281,10 +332,13 @@ export async function authenticateWithGoogle(idToken: string): Promise<PublicUse
     },
   });
 
-  return toPublicUser(created);
+  return toPublicUser(created, { emailVerified });
 }
 
-export async function getUserProfile(userId: string): Promise<PublicUser> {
+export async function getUserProfile(
+  userId: string,
+  options?: { emailVerified?: boolean },
+): Promise<PublicUser> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
   });
@@ -293,12 +347,13 @@ export async function getUserProfile(userId: string): Promise<PublicUser> {
     throw notFound('Usuario no encontrado', 'USER_NOT_FOUND');
   }
 
-  return toPublicUser(user);
+  return toPublicUser(user, options);
 }
 
 export async function updateUserProfile(
   userId: string,
   input: UpdateProfileInput,
+  options?: { emailVerified?: boolean },
 ): Promise<PublicUser> {
   const user = await prisma.user.update({
     where: { id: userId },
@@ -310,7 +365,7 @@ export async function updateUserProfile(
   });
 
   setCachedFirebaseUser(user);
-  return toPublicUser(user);
+  return toPublicUser(user, options);
 }
 
 export async function getInvitePreview(query: InvitePreviewQuery) {

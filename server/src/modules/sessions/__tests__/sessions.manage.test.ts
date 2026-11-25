@@ -7,6 +7,7 @@ const sessionUpdateMock = vi.fn();
 const sessionDeleteMock = vi.fn();
 const sessionFindUniqueMock = vi.fn();
 const sessionFindManyMock = vi.fn();
+const sessionProposalCountMock = vi.fn();
 const sessionSeriesFindManyMock = vi.fn();
 const sessionSeriesUpdateMock = vi.fn();
 const userGameFindManyMock = vi.fn();
@@ -19,6 +20,9 @@ const txMock = {
   session: {
     update: (...args: unknown[]) => sessionUpdateMock(...args),
     delete: (...args: unknown[]) => sessionDeleteMock(...args),
+  },
+  sessionProposal: {
+    count: (...args: unknown[]) => sessionProposalCountMock(...args),
   },
   sessionSeries: {
     update: (...args: unknown[]) => sessionSeriesUpdateMock(...args),
@@ -122,47 +126,81 @@ describe('updateSession', () => {
   });
 
   it('permite al anfitrión editar día, lugar y título de una juntada abierta', async () => {
+    const newDate = new Date('2026-11-29T19:00:00Z');
     queryRawMock.mockResolvedValueOnce([
-      { id: SESSION_ID, group_id: GROUP_ID, host_id: HOST_ID, status: SessionStatus.voting },
+      {
+        id: SESSION_ID,
+        group_id: GROUP_ID,
+        series_id: null,
+        host_id: HOST_ID,
+        status: SessionStatus.voting,
+        max_proposals_per_user: null,
+      },
     ]);
     groupMemberFindUniqueMock.mockResolvedValue({ role: GroupRole.member });
-    sessionUpdateMock.mockResolvedValue({ id: SESSION_ID });
-    mockSessionDetail({ title: 'Domingo de Euros', location: 'Casa de Lucas', maxProposalsPerUser: 3 });
+    sessionUpdateMock.mockResolvedValue({
+      id: SESSION_ID,
+      title: 'Domingo de Euros',
+      scheduledAt: newDate,
+      location: 'Casa de Lucas',
+      status: SessionStatus.voting,
+      maxProposalsPerUser: 3,
+    });
+    sessionProposalCountMock.mockResolvedValue(1);
 
-    const newDate = new Date('2026-11-29T19:00:00Z');
-    const detail = await updateSession(HOST_ID, SESSION_ID, {
+    const patch = await updateSession(HOST_ID, SESSION_ID, {
       title: 'Domingo de Euros',
       scheduledAt: newDate,
       location: 'Casa de Lucas',
       maxProposalsPerUser: 3,
     });
 
-    expect(sessionUpdateMock).toHaveBeenCalledWith({
-      where: { id: SESSION_ID },
-      data: {
-        title: 'Domingo de Euros',
-        scheduledAt: newDate,
-        location: 'Casa de Lucas',
-        maxProposalsPerUser: 3,
-      },
-    });
-    expect(detail.title).toBe('Domingo de Euros');
-    expect(detail.location).toBe('Casa de Lucas');
+    expect(sessionUpdateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: SESSION_ID },
+        data: {
+          title: 'Domingo de Euros',
+          scheduledAt: newDate,
+          location: 'Casa de Lucas',
+          maxProposalsPerUser: 3,
+        },
+      }),
+    );
+    expect(sessionFindUniqueMock).not.toHaveBeenCalled();
+    expect(patch.title).toBe('Domingo de Euros');
+    expect(patch.location).toBe('Casa de Lucas');
+    expect(patch.userProposalsCount).toBe(1);
+    expect(patch.proposalsRemaining).toBe(2);
   });
 
   it('permite a un administrador del grupo editar la juntada', async () => {
     queryRawMock.mockResolvedValueOnce([
-      { id: SESSION_ID, group_id: GROUP_ID, host_id: HOST_ID, status: SessionStatus.locked },
+      {
+        id: SESSION_ID,
+        group_id: GROUP_ID,
+        series_id: null,
+        host_id: HOST_ID,
+        status: SessionStatus.locked,
+        max_proposals_per_user: null,
+      },
     ]);
     groupMemberFindUniqueMock.mockResolvedValue({ role: GroupRole.admin });
-    sessionUpdateMock.mockResolvedValue({ id: SESSION_ID });
-    mockSessionDetail({ location: 'Club' });
+    sessionUpdateMock.mockResolvedValue({
+      id: SESSION_ID,
+      title: 'Sábado',
+      scheduledAt: new Date('2026-11-28T20:00:00Z'),
+      location: 'Club',
+      status: SessionStatus.locked,
+      maxProposalsPerUser: null,
+    });
 
     await updateSession(ADMIN_ID, SESSION_ID, { location: 'Club' });
-    expect(sessionUpdateMock).toHaveBeenCalledWith({
-      where: { id: SESSION_ID },
-      data: { location: 'Club' },
-    });
+    expect(sessionUpdateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: SESSION_ID },
+        data: { location: 'Club' },
+      }),
+    );
   });
 
   it('rechaza con 403 SESSION_HOST_REQUIRED a miembros comunes', async () => {

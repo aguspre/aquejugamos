@@ -84,7 +84,7 @@ export async function upsertGamesFromBgg(
 async function persistBggGameDetails(detailsList: BggGameDetails[]): Promise<void> {
   if (detailsList.length === 0) return;
 
-  // 1. Upsert all unique mechanics first
+  // 1. Upsert all unique mechanics in batch instead of sequential N+1 round-trips
   const uniqueMechanics = new Map<number, string>();
   for (const details of detailsList) {
     for (const mechanic of details.mechanics) {
@@ -93,14 +93,20 @@ async function persistBggGameDetails(detailsList: BggGameDetails[]): Promise<voi
   }
 
   const mechanicIdByBggId = new Map<number, string>();
-  for (const [bggId, name] of uniqueMechanics.entries()) {
-    const record = await prisma.mechanic.upsert({
-      where: { bggId },
-      update: { name },
-      create: { bggId, name },
+  if (uniqueMechanics.size > 0) {
+    const mechanicEntries = Array.from(uniqueMechanics.entries());
+    await prisma.mechanic.createMany({
+      data: mechanicEntries.map(([bggId, name]) => ({ bggId, name })),
+      skipDuplicates: true,
+    });
+
+    const mechanicRows = await prisma.mechanic.findMany({
+      where: { bggId: { in: mechanicEntries.map(([bggId]) => bggId) } },
       select: { id: true, bggId: true },
     });
-    mechanicIdByBggId.set(record.bggId, record.id);
+    for (const row of mechanicRows) {
+      mechanicIdByBggId.set(row.bggId, row.id);
+    }
   }
 
   // 2. Upsert each game and refresh its mechanics links
@@ -200,7 +206,17 @@ export async function syncUserBggCollection(
   try {
     const env = getEnv();
     const rawCollectionItems = await getBggClient().fetchUserCollection(bggUsername);
-    const collectionItems = rawCollectionItems.slice(0, env.BGG_MAX_COLLECTION_ITEMS);
+    const dedupedMap = new Map<number, (typeof rawCollectionItems)[number]>();
+    for (const item of rawCollectionItems) {
+      const prev = dedupedMap.get(item.bggId);
+      if (!prev || (prev.personalRating === null && item.personalRating !== null)) {
+        dedupedMap.set(item.bggId, item);
+      }
+    }
+    const collectionItems = Array.from(dedupedMap.values()).slice(
+      0,
+      env.BGG_MAX_COLLECTION_ITEMS,
+    );
     const collectionBggIds = collectionItems.map((item) => item.bggId);
 
     const { gamesByBggId, metadataRefreshed } = await upsertGamesFromBgg(collectionBggIds, {
@@ -216,12 +232,15 @@ export async function syncUserBggCollection(
         userId,
         gameId: { in: resolvedGameIds },
       },
-      select: { gameId: true },
+      select: { gameId: true, status: true, personalRating: true },
     });
 
-    const existingGameIdSet = new Set(existingLibrary.map((entry) => entry.gameId));
+    const existingByGameId = new Map(existingLibrary.map((entry) => [entry.gameId, entry]));
     let addedToLibrary = 0;
     let updatedInLibrary = 0;
+
+    const toCreate: Prisma.UserGameCreateManyInput[] = [];
+    const toUpdate: Prisma.PrismaPromise<unknown>[] = [];
 
     for (const item of collectionItems) {
       const game = gamesByBggId.get(item.bggId);
@@ -232,30 +251,51 @@ export async function syncUserBggCollection(
           ? new Prisma.Decimal(item.personalRating.toFixed(2))
           : undefined;
 
-      await prisma.userGame.upsert({
-        where: {
-          userId_gameId: {
-            userId,
-            gameId: game.id,
-          },
-        },
-        update: {
-          status: UserGameStatus.owned,
-          ...(ratingDecimal !== undefined ? { personalRating: ratingDecimal } : {}),
-        },
-        create: {
+      const existing = existingByGameId.get(game.id);
+      if (!existing) {
+        addedToLibrary += 1;
+        toCreate.push({
           userId,
           gameId: game.id,
           status: UserGameStatus.owned,
           personalRating: ratingDecimal ?? null,
-        },
-      });
-
-      if (existingGameIdSet.has(game.id)) {
-        updatedInLibrary += 1;
+        });
       } else {
-        addedToLibrary += 1;
+        updatedInLibrary += 1;
+        const statusNeedsUpdate = existing.status !== UserGameStatus.owned;
+        const ratingNeedsUpdate =
+          ratingDecimal !== undefined &&
+          (existing.personalRating === null || !existing.personalRating.equals(ratingDecimal));
+
+        if (statusNeedsUpdate || ratingNeedsUpdate) {
+          toUpdate.push(
+            prisma.userGame.update({
+              where: {
+                userId_gameId: {
+                  userId,
+                  gameId: game.id,
+                },
+              },
+              data: {
+                status: UserGameStatus.owned,
+                ...(ratingDecimal !== undefined ? { personalRating: ratingDecimal } : {}),
+              },
+            }),
+          );
+        }
       }
+    }
+
+    if (toCreate.length > 0) {
+      await prisma.userGame.createMany({
+        data: toCreate,
+        skipDuplicates: true,
+      });
+    }
+
+    const UPDATE_BATCH_SIZE = 50;
+    for (let i = 0; i < toUpdate.length; i += UPDATE_BATCH_SIZE) {
+      await prisma.$transaction(toUpdate.slice(i, i + UPDATE_BATCH_SIZE));
     }
 
     const syncedAt = new Date();

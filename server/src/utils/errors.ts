@@ -1,4 +1,7 @@
+const APP_ERROR_BRAND = Symbol.for('aquejugamos.AppError');
+
 export class AppError extends Error {
+  public readonly [APP_ERROR_BRAND] = true as const;
   public readonly statusCode: number;
   public readonly code: string;
   public readonly details?: unknown;
@@ -10,6 +13,25 @@ export class AppError extends Error {
     this.code = code;
     this.details = details;
   }
+
+  static [Symbol.hasInstance](instance: unknown): boolean {
+    return isAppError(instance);
+  }
+}
+
+export function isAppError(value: unknown): value is AppError {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<PropertyKey, unknown>;
+  return (
+    candidate[APP_ERROR_BRAND] === true ||
+    (candidate.name === 'AppError' &&
+      typeof candidate.statusCode === 'number' &&
+      Number.isInteger(candidate.statusCode) &&
+      candidate.statusCode >= 100 &&
+      candidate.statusCode <= 599 &&
+      typeof candidate.code === 'string' &&
+      typeof candidate.message === 'string')
+  );
 }
 
 export const badRequest = (message: string, details?: unknown, code = 'BAD_REQUEST') =>

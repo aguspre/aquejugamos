@@ -61,6 +61,7 @@ describe('authenticate middleware (Firebase ID Token + legacy JWT)', () => {
     expect(request.user).toEqual({
       sub: 'prisma-uuid-1',
       email: 'agus@example.com',
+      emailVerified: false,
       firebaseUid: 'fb-uid-42',
     });
   });

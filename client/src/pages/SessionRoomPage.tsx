@@ -159,6 +159,12 @@ export function SessionRoomPage() {
     () => sessions.find((s) => s.id === id) ?? null,
   );
   const [sessionPool, setSessionPool] = useState<SessionGameItem[]>([]);
+  const [poolLoading, setPoolLoading] = useState(false);
+  const [poolError, setPoolError] = useState<string | null>(null);
+  const [poolRetryToken, setPoolRetryToken] = useState(0);
+  const [poolLoadedForSignature, setPoolLoadedForSignature] = useState<
+    string | null
+  >(null);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>("proposals");
@@ -191,6 +197,9 @@ export function SessionRoomPage() {
   const rsvpSeqRef = useRef(0);
   const rsvpQueueRef = useRef<Promise<void>>(Promise.resolve());
   const lastConfirmedSessionRef = useRef<GameSession | null>(session);
+  const sessionsListRef = useRef<GameSession[]>(sessions);
+  sessionsListRef.current = sessions;
+  const poolLoadSeqRef = useRef(0);
 
   const inviteTokenParam = searchParams.get("invite");
   const shouldRedirectInviteToWelcome = Boolean(
@@ -217,24 +226,28 @@ export function SessionRoomPage() {
     try {
       const inviteToken = searchParams.get("invite");
       let loadedSession: GameSession;
-      let pool: SessionGameItem[];
 
       if (inviteToken) {
         loadedSession = await joinSessionByToken(inviteToken, "going");
         if (isStale()) return;
         setSearchParams({}, { replace: true });
-        pool = await loadSessionPool(loadedSession.id);
       } else {
-        [loadedSession, pool] = await Promise.all([
-          loadSessionDetail(id),
-          loadSessionPool(id),
-        ]);
+        const cached = sessionsListRef.current.find((s) => s.id === id);
+        const isFreshDetail = Boolean(
+          cached?.isDetailLoaded &&
+            cached.detailLoadedAt &&
+            Date.now() - cached.detailLoadedAt < 15_000,
+        );
+        if (cached && isFreshDetail) {
+          loadedSession = cached;
+        } else {
+          loadedSession = await loadSessionDetail(id);
+        }
       }
 
       if (isStale()) return;
       lastConfirmedSessionRef.current = loadedSession;
       setSession(loadedSession);
-      setSessionPool(pool);
     } catch (err) {
       if (isStale()) return;
       setErrorMsg(
@@ -252,7 +265,6 @@ export function SessionRoomPage() {
     setSearchParams,
     joinSessionByToken,
     loadSessionDetail,
-    loadSessionPool,
   ]);
 
   useEffect(() => {
@@ -273,6 +285,9 @@ export function SessionRoomPage() {
       lastConfirmedSessionRef.current = null;
     }
     setSessionPool([]);
+    setPoolLoadedForSignature(null);
+    setPoolLoading(false);
+    setPoolError(null);
     setActiveTab("proposals");
     setErrorMsg(null);
     setCopiedInvite(false);
@@ -284,6 +299,7 @@ export function SessionRoomPage() {
     setProposalToRemoveId(null);
     voteSeqRef.current += 1;
     rsvpSeqRef.current += 1;
+    poolLoadSeqRef.current += 1;
   }, [id]);
 
   useEffect(() => {
@@ -350,6 +366,71 @@ export function SessionRoomPage() {
   );
   const confirmedCount = goingParticipants.length;
 
+  const sessionId = session?.id ?? null;
+
+  const goingPoolSignature = useMemo(() => {
+    if (!sessionId) return null;
+    const sortedIds = goingParticipants
+      .map((p) => p.user.id)
+      .sort()
+      .join(",");
+    return `${sessionId}:${sortedIds}`;
+  }, [sessionId, goingParticipants]);
+
+  const isPoolReadyForCurrentAttendees =
+    goingPoolSignature !== null &&
+    poolLoadedForSignature === goingPoolSignature;
+
+  // Lazy-load combined pool ONLY when user opens the "pool" tab or attendees change while viewing "pool"
+  useEffect(() => {
+    if (
+      activeTab !== "pool" ||
+      !canLoadRoom ||
+      !sessionId ||
+      !goingPoolSignature ||
+      poolLoadedForSignature === goingPoolSignature
+    ) {
+      return;
+    }
+
+    const seq = ++poolLoadSeqRef.current;
+    setPoolLoading(true);
+    setPoolError(null);
+
+    void (async () => {
+      try {
+        // Wait for any in-flight optimistic RSVP update so Postgres has the latest going participants
+        await rsvpQueueRef.current.catch(() => undefined);
+        if (seq !== poolLoadSeqRef.current) return;
+
+        const pool = await loadSessionPool(sessionId);
+        if (seq !== poolLoadSeqRef.current) return;
+        setSessionPool(pool);
+        setPoolLoadedForSignature(goingPoolSignature);
+        setPoolError(null);
+      } catch (err) {
+        if (seq !== poolLoadSeqRef.current) return;
+        setPoolError(
+          err instanceof ApiError
+            ? err.message
+            : "No se pudo cargar el pool combinado de asistentes.",
+        );
+      } finally {
+        if (seq === poolLoadSeqRef.current) {
+          setPoolLoading(false);
+        }
+      }
+    })();
+  }, [
+    activeTab,
+    canLoadRoom,
+    sessionId,
+    goingPoolSignature,
+    poolLoadedForSignature,
+    poolRetryToken,
+    loadSessionPool,
+  ]);
+
   const filteredPool = useMemo(() => {
     const baseFiltered = filterGames(sessionPool, poolFilters);
     if (!smartPlayerFilter || confirmedCount === 0) {
@@ -388,7 +469,10 @@ export function SessionRoomPage() {
     );
   }
 
-  if ((authLoading || isAwaitingBackendSync || loading) && !session) {
+  if (
+    (authLoading || isAwaitingBackendSync || loading) &&
+    (!session?.isDetailLoaded || Boolean(inviteTokenParam))
+  ) {
     return (
       <PageLoadingSkeleton variant="session-room" slow={backendSyncSlow} />
     );
@@ -491,7 +575,6 @@ export function SessionRoomPage() {
 
   const runSessionAction = async (
     action: () => Promise<GameSession>,
-    refreshPoolToo = false,
   ) => {
     setBusyAction(true);
     setErrorMsg(null);
@@ -501,10 +584,6 @@ export function SessionRoomPage() {
       const updated = await action();
       lastConfirmedSessionRef.current = updated;
       setSession(updated);
-      if (refreshPoolToo) {
-        const pool = await loadSessionPool(updated.id);
-        setSessionPool(pool);
-      }
     } catch (err) {
       setErrorMsg(
         err instanceof ApiError
@@ -540,14 +619,6 @@ export function SessionRoomPage() {
           }
           if (seq === rsvpSeqRef.current) {
             setSession(updated);
-            try {
-              const pool = await loadSessionPool(updated.id);
-              if (seq === rsvpSeqRef.current) {
-                setSessionPool(pool);
-              }
-            } catch {
-              // Pool refresh failure does not revert a confirmed RSVP update
-            }
           }
         } catch (err) {
           if (baseSnapshot.id !== currentRoomIdRef.current) return;
@@ -703,12 +774,6 @@ export function SessionRoomPage() {
       setSession(updated);
       setProposingGame(null);
       setProposalNote("");
-      try {
-        const pool = await loadSessionPool(updated.id);
-        setSessionPool(pool);
-      } catch {
-        // Pool refresh failure does not revert a confirmed proposal
-      }
     } catch (err) {
       const message =
         err instanceof ApiError ? err.message : "No se pudo proponer el juego.";
@@ -724,13 +789,9 @@ export function SessionRoomPage() {
         setProposeError(null);
         setErrorMsg(message);
         try {
-          const [fresh, freshPool] = await Promise.all([
-            loadSessionDetail(session.id),
-            loadSessionPool(session.id),
-          ]);
+          const fresh = await loadSessionDetail(session.id);
           lastConfirmedSessionRef.current = fresh;
           setSession(fresh);
-          setSessionPool(freshPool);
         } catch {
           // Keep error message even if background resync fails
         }
@@ -779,12 +840,6 @@ export function SessionRoomPage() {
       setActionNotice(
         `Se quitó “${proposal.game.name}” de la votación${votesMsg}.`,
       );
-
-      void loadSessionPool(updated.id)
-        .then((pool) => setSessionPool(pool))
-        .catch(() => {
-          // Pool refresh failure does not revert a confirmed removal
-        });
     } catch (err) {
       const message =
         err instanceof ApiError
@@ -1084,8 +1139,9 @@ export function SessionRoomPage() {
                 {confirmedCount === 1 ? "confirmado" : "confirmados"}
               </span>
               <span className="block text-[11px] font-medium text-forest-700 num-tabular">
-                {sessionPool.filter((g) => !g.isExpansion).length} juegos en el
-                pool
+                {isPoolReadyForCurrentAttendees
+                  ? `${sessionPool.filter((g) => !g.isExpansion).length} juegos en el pool`
+                  : `${session.proposals.length} ${session.proposals.length === 1 ? "propuesta" : "propuestas"}`}
               </span>
             </div>
           </div>
@@ -1281,15 +1337,17 @@ export function SessionRoomPage() {
         >
           <Library className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="truncate">Pool de Asistentes</span>
-          <span
-            className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-extrabold num-tabular ${
-              activeTab === "pool"
-                ? "bg-white/20 text-white"
-                : "bg-canvas-deep text-ink-muted"
-            }`}
-          >
-            {sessionPool.filter((g) => !g.isExpansion).length}
-          </span>
+          {isPoolReadyForCurrentAttendees && (
+            <span
+              className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-extrabold num-tabular ${
+                activeTab === "pool"
+                  ? "bg-white/20 text-white"
+                  : "bg-canvas-deep text-ink-muted"
+              }`}
+            >
+              {sessionPool.filter((g) => !g.isExpansion).length}
+            </span>
+          )}
         </button>
       </div>
 
@@ -1568,14 +1626,12 @@ export function SessionRoomPage() {
                                 type="button"
                                 disabled={busyAction}
                                 onClick={() =>
-                                  void runSessionAction(
-                                    () =>
-                                      updateProposalStatus(
-                                        session.id,
-                                        proposal.id,
-                                        "open",
-                                      ),
-                                    true,
+                                  void runSessionAction(() =>
+                                    updateProposalStatus(
+                                      session.id,
+                                      proposal.id,
+                                      "open",
+                                    ),
                                   )
                                 }
                                 className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-border bg-canvas px-3 text-xs font-semibold text-ink-muted hover:border-border-strong hover:text-ink disabled:opacity-60 transition"
@@ -1829,14 +1885,12 @@ export function SessionRoomPage() {
                                 type="button"
                                 disabled={busyAction}
                                 onClick={() =>
-                                  void runSessionAction(
-                                    () =>
-                                      updateProposalStatus(
-                                        session.id,
-                                        proposal.id,
-                                        "accepted",
-                                      ),
-                                    true,
+                                  void runSessionAction(() =>
+                                    updateProposalStatus(
+                                      session.id,
+                                      proposal.id,
+                                      "accepted",
+                                    ),
                                   )
                                 }
                                 className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-forest-200 bg-forest-50 px-3 text-xs font-bold text-forest-800 hover:bg-forest-100 disabled:opacity-60 transition"
@@ -2032,7 +2086,29 @@ export function SessionRoomPage() {
             placeholder="Buscar en el pool combinado..."
           />
 
-          {filteredPool.length === 0 ? (
+          {poolLoading && !isPoolReadyForCurrentAttendees ? (
+            <div className="rounded-2xl border border-border bg-surface/80 px-6 py-12 flex items-center justify-center gap-2.5 text-sm font-semibold text-ink-muted">
+              <Loader2
+                className="h-4.5 w-4.5 animate-spin text-forest-600"
+                aria-hidden="true"
+              />
+              <span>Cruzando ludotecas de los asistentes…</span>
+            </div>
+          ) : poolError && !isPoolReadyForCurrentAttendees ? (
+            <div
+              role="alert"
+              className="rounded-2xl border border-terracotta-200 bg-terracotta-50 px-6 py-8 text-center space-y-3"
+            >
+              <p className="text-sm font-bold text-terracotta-700">{poolError}</p>
+              <button
+                type="button"
+                onClick={() => setPoolRetryToken((t) => t + 1)}
+                className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-terracotta-500 px-4 text-xs font-bold text-white hover:bg-terracotta-600 transition"
+              >
+                Reintentar carga del pool
+              </button>
+            </div>
+          ) : filteredPool.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-border-strong bg-surface/70 px-6 py-12 text-center space-y-2">
               <p className="font-[var(--font-display)] text-lg font-bold text-ink">
                 No hay juegos compatibles en el pool
@@ -2046,10 +2122,11 @@ export function SessionRoomPage() {
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {filteredPool.map((item) => {
-                const liveProposalStatus = hasProposalQuotaDetail
+                const useLiveSessionProposals = Boolean(session.isDetailLoaded);
+                const liveProposalStatus = useLiveSessionProposals
                   ? (proposalStatusByGameId.get(item.id) ?? null)
                   : (item.proposalStatus ?? null);
-                const liveIsProposed = hasProposalQuotaDetail
+                const liveIsProposed = useLiveSessionProposals
                   ? liveProposalStatus !== null
                   : item.isProposed;
 

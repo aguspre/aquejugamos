@@ -4,8 +4,27 @@ import { z } from 'zod';
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3001),
+  LOG_LEVEL: z
+    .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
+    .optional(),
+  SLOW_REQUEST_THRESHOLD_MS: z.coerce.number().int().positive().default(1000),
+  SLOW_QUERY_THRESHOLD_MS: z.coerce.number().int().positive().default(120),
+  ADMIN_EMAILS: z.string().optional().default(''),
+  ALLOW_DEV_ADMIN_BYPASS: z
+    .enum(['true', 'false', '1', '0'])
+    .optional()
+    .default('false'),
+  ADMIN_METRICS_TOKEN: z
+    .string()
+    .optional()
+    .default('')
+    .refine(
+      (val) => val.trim() === '' || val.trim().length >= 16,
+      'ADMIN_METRICS_TOKEN debe tener al menos 16 caracteres si se configura',
+    ),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL es requerida'),
-  CORS_ORIGIN: z.string().default('http://localhost:5173'),
+  DATABASE_URL_UNPOOLED: z.string().optional().default(''),
+  CORS_ORIGIN: z.string().min(1, 'CORS_ORIGIN no puede estar vacío').default('http://localhost:5173'),
   JWT_SECRET: z.string().min(16, 'JWT_SECRET debe tener al menos 16 caracteres'),
   JWT_EXPIRES_IN: z.string().default('7d'),
   GOOGLE_CLIENT_ID: z.string().optional().default(''),

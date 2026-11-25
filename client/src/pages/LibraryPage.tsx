@@ -77,9 +77,12 @@ export function LibraryPage() {
   const {
     currentUser,
     isBootstrapping,
+    isLibraryLoading,
+    libraryError,
     library,
     sessions,
     lastBggSyncLabel,
+    ensureLibraryLoaded,
     syncWithBgg,
     searchBgg,
     importBggGame,
@@ -121,7 +124,9 @@ export function LibraryPage() {
   const [bggResults, setBggResults] = useState<BggSearchResult[]>([]);
   const [bggSearching, setBggSearching] = useState(false);
   const [bggSearchError, setBggSearchError] = useState<string | null>(null);
-  const [importingBggId, setImportingBggId] = useState<number | null>(null);
+  const [importingBggIds, setImportingBggIds] = useState<Set<number>>(
+    () => new Set(),
+  );
 
   useEffect(() => {
     if (currentUser.bggUsername) {
@@ -129,6 +134,11 @@ export function LibraryPage() {
       setEditingBggUser(false);
     }
   }, [currentUser.bggUsername]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !backendUser) return;
+    void ensureLibraryLoaded();
+  }, [isAuthenticated, backendUser, ensureLibraryLoaded]);
 
   useEffect(() => {
     if (!isAuthenticated || !backendUser) {
@@ -294,7 +304,12 @@ export function LibraryPage() {
     bggId: number,
     status: UserGameStatus = "owned",
   ) => {
-    setImportingBggId(bggId);
+    if (importingBggIds.has(bggId)) return;
+    setImportingBggIds((prev) => {
+      const next = new Set(prev);
+      next.add(bggId);
+      return next;
+    });
     setBggSearchError(null);
     try {
       const imported = await importBggGame(bggId, status);
@@ -310,7 +325,11 @@ export function LibraryPage() {
         err instanceof ApiError ? err.message : "No se pudo importar el juego.",
       );
     } finally {
-      setImportingBggId(null);
+      setImportingBggIds((prev) => {
+        const next = new Set(prev);
+        next.delete(bggId);
+        return next;
+      });
     }
   };
 
@@ -583,8 +602,23 @@ export function LibraryPage() {
       )}
 
       {/* Loading / Empty Library State */}
-      {isBootstrapping ? (
+      {isBootstrapping || (isLibraryLoading && library.length === 0) ? (
         <PageLoadingSkeleton variant="library" />
+      ) : libraryError && library.length === 0 ? (
+        <div
+          role="alert"
+          className="rounded-3xl border border-terracotta-200 bg-terracotta-50 px-6 py-10 text-center space-y-3"
+        >
+          <p className="font-bold text-terracotta-700">{libraryError}</p>
+          <button
+            type="button"
+            onClick={() => void ensureLibraryLoaded(true)}
+            className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-terracotta-500 px-4 text-xs font-bold text-white hover:bg-terracotta-600 transition"
+          >
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+            Reintentar
+          </button>
+        </div>
       ) : library.length === 0 ? (
         <div className="rounded-3xl border border-dashed border-border-strong bg-surface/80 px-6 py-14 text-center space-y-4">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-forest-50 text-forest-700">
@@ -944,7 +978,7 @@ export function LibraryPage() {
               ) : (
                 <ul className="space-y-2">
                   {bggResults.map((item) => {
-                    const isImporting = importingBggId === item.bggId;
+                    const isImporting = importingBggIds.has(item.bggId);
                     const alreadyInLibrary = Boolean(item.inLibraryStatus);
                     const playersLabel =
                       item.minPlayers && item.maxPlayers

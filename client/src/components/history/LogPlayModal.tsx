@@ -9,7 +9,7 @@ import {
   Trophy,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiError } from '../../api/client';
 import { UserAvatar } from '../ui/UserAvatar';
 import { useAppState } from '../../context/AppStateContext';
@@ -25,14 +25,22 @@ export function LogPlayModal() {
   const {
     activeGroup,
     allGames,
+    isLibraryLoading,
+    libraryError,
     users,
     logPlayModalPrefill,
+    ensureLibraryLoaded,
     closeLogPlayModal,
     addPlayLog,
   } = useAppState();
 
   const { open, gameId, sessionId, sessionTitle, groupId, playerIds } =
     logPlayModalPrefill;
+
+  useEffect(() => {
+    if (!open) return;
+    void ensureLibraryLoaded();
+  }, [open, ensureLibraryLoaded]);
 
   const selectableUsers = useMemo(
     () =>
@@ -52,8 +60,15 @@ export function LogPlayModal() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const wasOpenRef = useRef(false);
+
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      wasOpenRef.current = false;
+      return;
+    }
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
 
     const initialGame = allGames.find((g) => g.id === gameId) ?? allGames[0];
     setSelectedGameId(initialGame?.id ?? '');
@@ -78,6 +93,16 @@ export function LogPlayModal() {
     }
     setPlayerState(nextRows);
   }, [open, gameId, playerIds, allGames, selectableUsers]);
+
+  // Populate initial game selection once lazy library load arrives without resetting user edits
+  useEffect(() => {
+    if (!open || selectedGameId || allGames.length === 0) return;
+    const initialGame = allGames.find((g) => g.id === gameId) ?? allGames[0];
+    if (initialGame) {
+      setSelectedGameId(initialGame.id);
+      setDurationMinutes(String(initialGame.playingTimeMinutes ?? 60));
+    }
+  }, [open, selectedGameId, gameId, allGames]);
 
   useEffect(() => {
     if (!open) return;
@@ -226,7 +251,24 @@ export function LogPlayModal() {
           </button>
         </div>
 
-        {allGames.length === 0 ? (
+        {isLibraryLoading && allGames.length === 0 ? (
+          <div className="p-8 flex items-center justify-center gap-2 text-sm font-semibold text-ink-muted">
+            <Loader2 className="h-4 w-4 animate-spin text-forest-600" aria-hidden="true" />
+            <span>Cargando tus juegos…</span>
+          </div>
+        ) : libraryError && allGames.length === 0 ? (
+          <div className="p-6 text-center space-y-3" role="alert">
+            <AlertCircle className="mx-auto h-8 w-8 text-terracotta-500" aria-hidden="true" />
+            <p className="text-sm font-bold text-ink">{libraryError}</p>
+            <button
+              type="button"
+              onClick={() => void ensureLibraryLoaded(true)}
+              className="min-h-10 rounded-xl bg-forest-600 px-4 text-xs font-bold text-white"
+            >
+              Reintentar
+            </button>
+          </div>
+        ) : allGames.length === 0 ? (
           <div className="p-6 text-center space-y-3">
             <Dices className="mx-auto h-9 w-9 text-ink-subtle" aria-hidden="true" />
             <p className="font-bold text-ink">Todavía no tenés juegos cargados</p>
